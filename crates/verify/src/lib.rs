@@ -97,4 +97,84 @@ pub proof fn dispatch_skip_nones(witnesses: Seq<Option<u64>>, fallback: u64, idx
     }
 }
 
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// PROOF: properties that follow from the spec
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+/// Property A: First-match-wins — the index returned by first_match is
+/// within bounds, and all witnesses before it are None.
+pub proof fn first_match_is_earliest(witnesses: Seq<Option<u64>>)
+    ensures
+        forall|i: nat| first_match(witnesses) == Some(i)
+            ==> (i as int) < witnesses.len(),
+        forall|i: nat| first_match(witnesses) == Some(i)
+            ==> forall|j: int| 0 <= j < i as int
+                ==> witnesses[j].is_none(),
+    decreases witnesses.len(),
+{
+    if witnesses.len() > 0 && witnesses[0].is_none() {
+        let tail = witnesses.subrange(1, witnesses.len() as int);
+        first_match_is_earliest(tail);
+
+        // Connect tail's property to witnesses. For first_match(witnesses)
+        // == Some(k), we have k >= 1 and first_match(tail) == Some(k-1).
+        // For j < k: j==0 is covered by witnesses[0].is_none(); j>0 uses
+        // tail[j-1] == witnesses[j] and the inductive hypothesis.
+        assert forall|i: nat, j: int|
+            first_match(witnesses) == Some(i) && 0 <= j && j < i as int
+            implies witnesses[j].is_none()
+        by {
+            if j == 0 {
+                assert(witnesses[0].is_none());
+            } else {
+                assert(tail[j - 1] == witnesses[j]);
+            }
+        }
+    }
+}
+
+/// Property B: Exhaustive fallback — if all witnesses are None, result is fallback.
+pub proof fn fallback_always_fires(witnesses: Seq<Option<u64>>, fallback: u64)
+    requires
+        forall|i: int| 0 <= i < witnesses.len()
+            ==> witnesses[i].is_none(),
+    ensures
+        dispatch_spec(witnesses, fallback) == fallback,
+    decreases witnesses.len(),
+{
+    if witnesses.len() > 0 {
+        fallback_always_fires(
+            witnesses.subrange(1, witnesses.len() as int),
+            fallback,
+        );
+    }
+}
+
+/// Property C: Hot dispatch returns the correct value — if witness i is
+/// Some(val) and all prior witnesses are None, dispatch returns val.
+pub proof fn hot_dispatch_correct(
+    witnesses: Seq<Option<u64>>,
+    fallback: u64,
+    hot_idx: nat,
+    val: u64,
+)
+    requires
+        (hot_idx as int) < witnesses.len(),
+        witnesses[hot_idx as int] == Some(val),
+        forall|j: int| 0 <= j < hot_idx as int
+            ==> witnesses[j].is_none(),
+    ensures
+        dispatch_spec(witnesses, fallback) == val,
+    decreases witnesses.len(),
+{
+    if hot_idx > 0 {
+        hot_dispatch_correct(
+            witnesses.subrange(1, witnesses.len() as int),
+            fallback,
+            (hot_idx - 1) as nat,
+            val,
+        );
+    }
+}
+
 } // verus!
