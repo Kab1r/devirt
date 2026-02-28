@@ -1,41 +1,37 @@
-[package]
-name = "devirt"
+[workspace]
+members = ["crates/*", "fuzz"]
+resolver = "3"
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
-description = "Transparent devirtualization for Rust trait objects via witness-method dispatch"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/Kab1r/devirt"
-readme = "README.md"
-keywords = ["devirtualization", "vtable", "no-std", "dispatch", "performance"]
-categories = ["no-std", "rust-patterns"]
 
-[dependencies]
+[workspace.dependencies]
 paste = "1"
-
-[dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 trybuild = "1"
-
-[[bench]]
-name = "dispatch"
-harness = false
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+devirt = { path = "crates/core" }
 
 [profile.bench]
 lto = "thin"
 codegen-units = 1
 
-[lints.rust]
+[workspace.lints.rust]
 unsafe_code = "forbid"
 missing_docs = "warn"
 
-[lints.rustdoc]
+[workspace.lints.rustdoc]
 missing_crate_level_docs = "deny"
 unescaped_backticks = "deny"
 
 # Exceptions
 private_doc_tests = "allow"
 
-[lints.clippy]
+[workspace.lints.clippy]
 # Highest priority - catch critical issues
 suspicious = { level = "deny", priority = -1 }
 complexity = { level = "deny", priority = -1 }

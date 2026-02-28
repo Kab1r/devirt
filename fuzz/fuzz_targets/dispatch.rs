@@ -1,4 +1,5 @@
 #![no_main]
+#![allow(missing_docs)]
 
 use std::cell::Cell;
 
@@ -51,7 +52,7 @@ devirt::r#impl!(Dispatch for HotB [hot] {
     fn notify(&self, x: f64) { self.trace.set(self.val * x); }
     fn transform(&mut self, x: f64) -> f64 { self.val *= x; self.val }
     fn reset(&mut self, x: f64) { self.val = x + 2.0; }
-    fn combine(&self, x: f64, y: f64) -> f64 { self.val * x + y }
+    fn combine(&self, x: f64, y: f64) -> f64 { self.val.mul_add(x, y) }
     fn val(&self) -> f64 { self.val }
     fn trace_val(&self) -> f64 { self.trace.get() }
 });
@@ -93,7 +94,7 @@ impl PlainDispatch for HotB {
     fn notify(&self, x: f64) { self.trace.set(self.val * x); }
     fn transform(&mut self, x: f64) -> f64 { self.val *= x; self.val }
     fn reset(&mut self, x: f64) { self.val = x + 2.0; }
-    fn combine(&self, x: f64, y: f64) -> f64 { self.val * x + y }
+    fn combine(&self, x: f64, y: f64) -> f64 { self.val.mul_add(x, y) }
     fn val(&self) -> f64 { self.val }
     fn trace_val(&self) -> f64 { self.trace.get() }
 }
