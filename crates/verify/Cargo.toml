@@ -1,0 +1,11 @@
+[package]
+name = "devirt-verify"
+version.workspace = true
+edition = "2021"
+publish = false
+
+[dependencies]
+vstd = { workspace = true, default-features = false }
+
+[package.metadata.verus]
+verify = true
