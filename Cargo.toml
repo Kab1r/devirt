@@ -1,0 +1,85 @@
+[package]
+name = "devirt"
+version = "0.1.0"
+edition = "2024"
+description = "Transparent devirtualization for Rust trait objects via witness-method dispatch"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Kab1r/devirt"
+readme = "README.md"
+keywords = ["devirtualization", "vtable", "no-std", "dispatch", "performance"]
+categories = ["no-std", "rust-patterns"]
+
+[dependencies]
+paste = "1"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "dispatch"
+harness = false
+
+[profile.bench]
+lto = "thin"
+codegen-units = 1
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[lints.rustdoc]
+missing_crate_level_docs = "deny"
+unescaped_backticks = "deny"
+
+# Exceptions
+private_doc_tests = "allow"
+
+[lints.clippy]
+# Highest priority - catch critical issues
+suspicious = { level = "deny", priority = -1 }
+complexity = { level = "deny", priority = -1 }
+perf = { level = "deny", priority = -1 }
+
+# Lower priority
+style = { level = "deny", priority = -1 }
+cargo = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+nursery = { level = "deny", priority = -1 }
+
+# Individual overrides from restriction group - DENY (real bugs/issues)
+unwrap_used = "deny"
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"
+panic_in_result_fn = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+fn_to_numeric_cast_any = "deny"
+exit = "deny"
+
+# Individual overrides from restriction group - WARN (helpful checks)
+allow_attributes = "warn"
+clone_on_ref_ptr = "warn"
+create_dir = "warn"
+map_err_ignore = "warn"
+missing_assert_message = "warn"
+empty_drop = "warn"
+if_then_some_else_none = "warn"
+lossy_float_literal = "warn"
+redundant_test_prefix = "warn"
+tests_outside_test_module = "warn"
+try_err = "warn"
+unnecessary_self_imports = "warn"
+unused_result_ok = "warn"
+rest_pat_in_fully_bound_structs = "warn"
+same_name_method = "warn"
+precedence_bits = "warn"
+suspicious_xor_used_as_pow = "warn"
+pathbuf_init_then_push = "warn"
+return_and_then = "warn"
+let_underscore_must_use = "warn"
+infinite_loop = "warn"
+rc_buffer = "warn"
+rc_mutex = "warn"
+renamed_function_params = "warn"
+error_impl_error = "warn"
