@@ -78,6 +78,9 @@
 
 #![no_std]
 
+#[cfg(kani)]
+extern crate kani;
+
 #[doc(hidden)]
 pub use paste::paste as __paste;
 
