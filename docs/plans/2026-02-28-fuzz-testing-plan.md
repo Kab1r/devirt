@@ -15,6 +15,7 @@
 ### Task 1: cargo fuzz scaffolding and fuzz target
 
 **Files:**
+
 - Create: `fuzz/Cargo.toml`
 - Create: `fuzz/fuzz_targets/dispatch.rs`
 - Modify: `.gitignore` (add fuzz artifacts)
@@ -59,6 +60,7 @@ members = ["."]
 **Step 3: Create `fuzz/fuzz_targets/dispatch.rs`**
 
 This is the core fuzz target. It defines:
+
 - 3 types: `HotA` (first in witness chain), `HotB` (second), `Cold` (falls through to vtable)
 - 7 trait methods covering all 4 dispatch arms + multi-arg + state readers
 - Identical method bodies in a plain trait for baseline comparison
@@ -258,15 +260,15 @@ fuzz_target!(|input: FuzzInput| {
 
 **Macro arm coverage map:**
 
-| Method | Dispatch arm | Witness chain tested |
-|---|---|---|
-| `compute` | `@dispatch_ref` | HotA=first, HotB=rest, Cold=fallthrough |
-| `notify` | `@dispatch_void` | HotA=first, HotB=rest, Cold=fallthrough |
-| `transform` | `@dispatch_mut` | HotA=first, HotB=rest, Cold=fallthrough |
-| `reset` | `@dispatch_mut_void` | HotA=first, HotB=rest, Cold=fallthrough |
-| `combine` | `@dispatch_ref` (multi-arg) | arg forwarding with 2 args |
-| `val` | `@dispatch_ref` (zero extra args) | zero-arg forwarding |
-| `trace_val` | `@dispatch_ref` (zero extra args) | zero-arg forwarding |
+| Method      | Dispatch arm                      | Witness chain tested                    |
+| ----------- | --------------------------------- | --------------------------------------- |
+| `compute`   | `@dispatch_ref`                   | HotA=first, HotB=rest, Cold=fallthrough |
+| `notify`    | `@dispatch_void`                  | HotA=first, HotB=rest, Cold=fallthrough |
+| `transform` | `@dispatch_mut`                   | HotA=first, HotB=rest, Cold=fallthrough |
+| `reset`     | `@dispatch_mut_void`              | HotA=first, HotB=rest, Cold=fallthrough |
+| `combine`   | `@dispatch_ref` (multi-arg)       | arg forwarding with 2 args              |
+| `val`       | `@dispatch_ref` (zero extra args) | zero-arg forwarding                     |
+| `trace_val` | `@dispatch_ref` (zero extra args) | zero-arg forwarding                     |
 
 **Step 4: Build the fuzz target**
 
@@ -290,6 +292,7 @@ git commit -m "Add cargo fuzz target exercising all dispatch arms"
 ### Task 2: trybuild pass tests
 
 **Files:**
+
 - Modify: `Cargo.toml` (add trybuild dev-dependency)
 - Create: `tests/ui.rs`
 - Create: `tests/ui/single_hot.rs`
@@ -511,6 +514,7 @@ git commit -m "Add trybuild pass tests for macro invocation patterns"
 ### Task 3: trybuild fail tests
 
 **Files:**
+
 - Create: `tests/ui/missing_method.rs`
 - Create: `tests/ui/missing_method.stderr` (auto-generated)
 - Create: `tests/ui/wrong_signature.rs`

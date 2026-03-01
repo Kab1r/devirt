@@ -10,21 +10,25 @@ Exercise all `macro_rules!` arms in `r#trait!` and `r#impl!` through two complem
 ## Macro arms to cover
 
 `r#trait!` dispatch arms (4):
+
 - `@dispatch_ref` — `&self`, non-void return
 - `@dispatch_void` — `&self`, void return
 - `@dispatch_mut` — `&mut self`, non-void return
 - `@dispatch_mut_void` — `&mut self`, void return
 
 Each dispatch arm also exercises:
+
 - `@spec_decl` (method declaration in inner trait)
 - `@witness_defaults` (default `None` witness per hot type)
 - `@outer_decl` (public trait method with dispatch chain)
 
 `r#impl!` arms:
+
 - Cold impl (`@hot_spec` not used, just `__spec_*`)
 - Hot impl — `@hot_spec` + `@hot_witness` for each receiver/return combo
 
 Witness chain coverage:
+
 - 2 hot types exercises the recursive `[$first $(, $rest)*]` → `[$($rest),*]` chain
 - 1 cold type exercises the base case (falls through all witnesses to `__spec_*`)
 
@@ -66,6 +70,7 @@ struct FuzzInput {
 ### Assertion strategy
 
 For each fuzzed input:
+
 1. Construct both `dyn DevirtTrait` and `dyn PlainTrait` with the same variant and field value
 2. Call all five methods on both
 3. For non-void methods: assert `result_devirt.to_bits() == result_plain.to_bits()` (handles NaN)
@@ -80,20 +85,20 @@ For each fuzzed input:
 
 ### Pass tests (should compile)
 
-| File | What it exercises |
-|---|---|
-| `single_hot.rs` | 1 hot type, 1 method (`&self -> T`) |
-| `multi_hot.rs` | 3 hot types, 1 method |
-| `all_arms.rs` | 1 hot + 1 cold, all 4 method signatures |
-| `multi_arg.rs` | Methods with 2+ arguments |
-| `pub_trait.rs` | `pub` visibility, doc attributes on trait and methods |
+| File            | What it exercises                                     |
+| --------------- | ----------------------------------------------------- |
+| `single_hot.rs` | 1 hot type, 1 method (`&self -> T`)                   |
+| `multi_hot.rs`  | 3 hot types, 1 method                                 |
+| `all_arms.rs`   | 1 hot + 1 cold, all 4 method signatures               |
+| `multi_arg.rs`  | Methods with 2+ arguments                             |
+| `pub_trait.rs`  | `pub` visibility, doc attributes on trait and methods |
 
 ### Fail tests (should produce compile errors)
 
-| File | What it catches |
-|---|---|
-| `missing_method.rs` | Impl block omits a required method |
-| `wrong_signature.rs` | Impl method has wrong arg types |
+| File                 | What it catches                    |
+| -------------------- | ---------------------------------- |
+| `missing_method.rs`  | Impl block omits a required method |
+| `wrong_signature.rs` | Impl method has wrong arg types    |
 
 `.stderr` files will be auto-generated on first run with `TRYBUILD=overwrite` and checked in. They are fragile across Rust versions — regenerate when bumping MSRV.
 

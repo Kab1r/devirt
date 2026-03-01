@@ -82,9 +82,9 @@ objects). Common scenarios:
 
 ## Performance characteristics
 
-| Path | Cost |
-|------|------|
-| Hot type dispatch | Zero overhead vs direct call (with LTO) |
+| Path               | Cost                                                                                                        |
+| ------------------ | ----------------------------------------------------------------------------------------------------------- |
+| Hot type dispatch  | Zero overhead vs direct call (with LTO)                                                                     |
 | Cold type dispatch | Linear in the number of hot types (one inlined `None`-returning branch per hot type before vtable fallback) |
 
 ## License

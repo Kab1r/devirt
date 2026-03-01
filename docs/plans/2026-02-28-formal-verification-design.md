@@ -8,12 +8,12 @@ Prove correctness properties of devirt's dispatch mechanism that fuzzing cannot 
 
 Four layers, each covering what the layer below cannot:
 
-| Layer | Tool | What it proves | Strength |
-|---|---|---|---|
-| Universal dispatch properties (all N) | Verus | First-match-wins, exhaustive fallback, termination | Mathematical proof, unbounded |
-| No UB + equivalence at specific N | Kani | No panics, no UB, devirt == direct call | Exhaustive over all values, bounded N |
-| Runtime correctness at scale | cargo fuzz | Same (probabilistic) | Fast, catches edge cases |
-| Compile-time macro correctness | trybuild | Accepts/rejects right syntax | Deterministic |
+| Layer                                 | Tool       | What it proves                                     | Strength                              |
+| ------------------------------------- | ---------- | -------------------------------------------------- | ------------------------------------- |
+| Universal dispatch properties (all N) | Verus      | First-match-wins, exhaustive fallback, termination | Mathematical proof, unbounded         |
+| No UB + equivalence at specific N     | Kani       | No panics, no UB, devirt == direct call            | Exhaustive over all values, bounded N |
+| Runtime correctness at scale          | cargo fuzz | Same (probabilistic)                               | Fast, catches edge cases              |
+| Compile-time macro correctness        | trybuild   | Accepts/rejects right syntax                       | Deterministic                         |
 
 The Verus proof operates on an **abstract model** of the dispatch chain (a loop over a sequence of witnesses). Kani operates on the **concrete macro expansions** at N=1, N=2, N=3. The connection between them is a structural refinement argument: the macro's recursive unrolling is equivalent to the abstract loop with a statically-known length.
 
@@ -164,6 +164,7 @@ ensures result == dispatch_spec(witnesses@, fallback)
 ```
 
 The loop invariant tracks:
+
 1. All witnesses before `idx` returned `None`
 2. The spec on the remaining suffix equals the spec on the whole sequence
 
@@ -405,6 +406,7 @@ fn trait2_hot_a_transform_equiv() {
 ### Why N=1, N=2, N=3 is sufficient
 
 The macro recursion has two arms:
+
 - **Recursive:** `[$first $(, $rest)*]` — peel first element, recurse on rest
 - **Base:** `[]` — call fallback
 
@@ -436,12 +438,12 @@ is semantically equivalent to `dispatch_exec(&vec![w1, w2, w3], fallback)` where
 
 The macro recursion and the abstract loop have identical structure:
 
-| Macro recursion | Abstract loop iteration |
-|---|---|
-| `[$first $(, $rest)*]` arm fires | `idx < witnesses.len()`, check `witnesses[idx]` |
-| `__try_method_as_first` returns `Some` → `return` | `witnesses[idx].is_some()` → `return` |
-| `__try_method_as_first` returns `None` → recurse on `[$($rest),*]` | `witnesses[idx].is_none()` → `idx += 1` |
-| `[]` arm fires → call `__spec_method` | `idx == witnesses.len()` → `return fallback` |
+| Macro recursion                                                    | Abstract loop iteration                         |
+| ------------------------------------------------------------------ | ----------------------------------------------- |
+| `[$first $(, $rest)*]` arm fires                                   | `idx < witnesses.len()`, check `witnesses[idx]` |
+| `__try_method_as_first` returns `Some` → `return`                  | `witnesses[idx].is_some()` → `return`           |
+| `__try_method_as_first` returns `None` → recurse on `[$($rest),*]` | `witnesses[idx].is_none()` → `idx += 1`         |
+| `[]` arm fires → call `__spec_method`                              | `idx == witnesses.len()` → `return fallback`    |
 
 The only difference is that the macro statically unrolls what the loop does dynamically. Unrolling does not change control flow semantics — it replaces a loop with a known trip count with a straight-line sequence of the same operations.
 
@@ -450,6 +452,7 @@ The only difference is that the macro statically unrolls what the loop does dyna
 Kani validates this structural correspondence empirically at N=1, N=2, N=3 by running the actual macro expansions and proving they produce correct results for all input values. If the macro expansion at some N deviated from the abstract model (e.g., a macro arm reordered witnesses, skipped a check, or fell through incorrectly), Kani would find a counterexample at that N.
 
 The combination:
+
 - **Verus** proves: if the code follows the abstract dispatch pattern, it is correct for all N
 - **Kani** proves: the macro output follows the abstract dispatch pattern at N=1, 2, 3 (for all input values)
 - **Structural argument**: the macro recursion has exactly two arms (peel-first and base-case), so N=1, 2, 3 exercises every arm and transition
