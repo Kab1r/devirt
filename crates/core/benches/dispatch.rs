@@ -69,6 +69,59 @@ devirt::r#impl!(Shape for Hexagon {
     fn scale(&mut self, factor: f64) { self.side *= factor; }
 });
 
+// ── Explicit Branch-Based Dispatch ───────────────────────────────────────────
+// This shows what pure branch-based dispatch looks like (comparing TypeTag enum)
+
+#[derive(Clone, Copy)]
+enum ShapeType {
+    Circle,
+    Rect,
+    Triangle,
+    Hexagon,
+}
+
+struct BranchShape {
+    ty: ShapeType,
+    data: BranchShapeData,
+}
+
+enum BranchShapeData {
+    Circle(Circle),
+    Rect(Rect),
+    Triangle(Triangle),
+    Hexagon(Hexagon),
+}
+
+impl BranchShape {
+    fn area(&self) -> f64 {
+        match &self.data {
+            BranchShapeData::Circle(c) => core::f64::consts::PI * c.radius * c.radius,
+            BranchShapeData::Rect(r) => r.w * r.h,
+            BranchShapeData::Triangle(t) => {
+                let s = (t.a + t.b + t.c) / 2.0;
+                (s * (s - t.a) * (s - t.b) * (s - t.c)).sqrt()
+            }
+            BranchShapeData::Hexagon(h) => 1.5 * 3.0_f64.sqrt() * h.side * h.side,
+        }
+    }
+
+    fn scale(&mut self, factor: f64) {
+        match &mut self.data {
+            BranchShapeData::Circle(c) => c.radius *= factor,
+            BranchShapeData::Rect(r) => {
+                r.w *= factor;
+                r.h *= factor;
+            }
+            BranchShapeData::Triangle(t) => {
+                t.a *= factor;
+                t.b *= factor;
+                t.c *= factor;
+            }
+            BranchShapeData::Hexagon(h) => h.side *= factor,
+        }
+    }
+}
+
 // ── Plain trait (baseline, normal vtable dispatch) ───────────────────────────
 
 trait PlainShape {
@@ -157,6 +210,28 @@ fn bench_area(c: &mut Criterion) {
         b.iter(|| black_box(shape_ref).area());
     });
 
+    // branch-based hot — explicit enum dispatch (Circle)
+    group.bench_function("branch_hot", |b| {
+        let shape = BranchShape {
+            ty: ShapeType::Circle,
+            data: BranchShapeData::Circle(Circle { radius: 5.0 }),
+        };
+        b.iter(|| black_box(&shape).area());
+    });
+
+    // branch-based cold — explicit enum dispatch (Triangle)
+    group.bench_function("branch_cold", |b| {
+        let shape = BranchShape {
+            ty: ShapeType::Triangle,
+            data: BranchShapeData::Triangle(Triangle {
+                a: 3.0,
+                b: 4.0,
+                c: 5.0,
+            }),
+        };
+        b.iter(|| black_box(&shape).area());
+    });
+
     group.finish();
 }
 
@@ -200,6 +275,30 @@ fn bench_scale(c: &mut Criterion) {
         b.iter(|| {
             let s: &mut dyn PlainShape = &mut *shape;
             black_box(s).scale(black_box(2.0));
+        });
+    });
+
+    group.bench_function("branch_hot", |b| {
+        let mut shape = BranchShape {
+            ty: ShapeType::Circle,
+            data: BranchShapeData::Circle(Circle { radius: 5.0 }),
+        };
+        b.iter(|| {
+            black_box(&mut shape).scale(black_box(2.0));
+        });
+    });
+
+    group.bench_function("branch_cold", |b| {
+        let mut shape = BranchShape {
+            ty: ShapeType::Triangle,
+            data: BranchShapeData::Triangle(Triangle {
+                a: 3.0,
+                b: 4.0,
+                c: 5.0,
+            }),
+        };
+        b.iter(|| {
+            black_box(&mut shape).scale(black_box(2.0));
         });
     });
 
@@ -249,6 +348,38 @@ fn bench_mixed_vec(c: &mut Criterion) {
         });
     });
 
+    group.bench_function("branch", |b| {
+        let shapes: Vec<BranchShape> = vec![
+            BranchShape {
+                ty: ShapeType::Circle,
+                data: BranchShapeData::Circle(Circle { radius: 5.0 }),
+            },
+            BranchShape {
+                ty: ShapeType::Rect,
+                data: BranchShapeData::Rect(Rect { w: 3.0, h: 4.0 }),
+            },
+            BranchShape {
+                ty: ShapeType::Triangle,
+                data: BranchShapeData::Triangle(Triangle {
+                    a: 3.0,
+                    b: 4.0,
+                    c: 5.0,
+                }),
+            },
+            BranchShape {
+                ty: ShapeType::Hexagon,
+                data: BranchShapeData::Hexagon(Hexagon { side: 2.0 }),
+            },
+        ];
+        b.iter(|| {
+            let mut total = 0.0_f64;
+            for s in &shapes {
+                total += black_box(s).area();
+            }
+            total
+        });
+    });
+
     // 90% hot types — the intended use case
     group.bench_function("devirt_hot_dominant", |b| {
         let shapes: Vec<Box<dyn Shape>> = vec![
@@ -289,6 +420,62 @@ fn bench_mixed_vec(c: &mut Criterion) {
             let mut total = 0.0_f64;
             for s in &shapes {
                 total += black_box(s.as_ref()).area();
+            }
+            total
+        });
+    });
+
+    group.bench_function("branch_hot_dominant", |b| {
+        let shapes: Vec<BranchShape> = vec![
+            BranchShape {
+                ty: ShapeType::Circle,
+                data: BranchShapeData::Circle(Circle { radius: 5.0 }),
+            },
+            BranchShape {
+                ty: ShapeType::Circle,
+                data: BranchShapeData::Circle(Circle { radius: 3.0 }),
+            },
+            BranchShape {
+                ty: ShapeType::Circle,
+                data: BranchShapeData::Circle(Circle { radius: 7.0 }),
+            },
+            BranchShape {
+                ty: ShapeType::Circle,
+                data: BranchShapeData::Circle(Circle { radius: 1.0 }),
+            },
+            BranchShape {
+                ty: ShapeType::Rect,
+                data: BranchShapeData::Rect(Rect { w: 3.0, h: 4.0 }),
+            },
+            BranchShape {
+                ty: ShapeType::Rect,
+                data: BranchShapeData::Rect(Rect { w: 5.0, h: 6.0 }),
+            },
+            BranchShape {
+                ty: ShapeType::Rect,
+                data: BranchShapeData::Rect(Rect { w: 2.0, h: 8.0 }),
+            },
+            BranchShape {
+                ty: ShapeType::Rect,
+                data: BranchShapeData::Rect(Rect { w: 1.0, h: 1.0 }),
+            },
+            BranchShape {
+                ty: ShapeType::Triangle,
+                data: BranchShapeData::Triangle(Triangle {
+                    a: 3.0,
+                    b: 4.0,
+                    c: 5.0,
+                }),
+            },
+            BranchShape {
+                ty: ShapeType::Hexagon,
+                data: BranchShapeData::Hexagon(Hexagon { side: 2.0 }),
+            },
+        ];
+        b.iter(|| {
+            let mut total = 0.0_f64;
+            for s in &shapes {
+                total += black_box(s).area();
             }
             total
         });

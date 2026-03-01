@@ -174,7 +174,7 @@ macro_rules! r#trait {
         $($rest:tt)*
     ) => {
         $crate::__paste! {
-            #[inline]
+            #[inline(always)]
             fn [<__try_ $method _as_ $hot:snake>](&self $(, _ : $argty)*) -> Option<$ret> { None }
         }
         $crate::r#trait!{@witness_defaults $hot, $($rest)*}
@@ -187,7 +187,7 @@ macro_rules! r#trait {
         $($rest:tt)*
     ) => {
         $crate::__paste! {
-            #[inline]
+            #[inline(always)]
             fn [<__try_ $method _as_ $hot:snake>](&self $(, _ : $argty)*) -> Option<()> { None }
         }
         $crate::r#trait!{@witness_defaults $hot, $($rest)*}
@@ -200,7 +200,7 @@ macro_rules! r#trait {
         $($rest:tt)*
     ) => {
         $crate::__paste! {
-            #[inline]
+            #[inline(always)]
             fn [<__try_ $method _as_ $hot:snake>](&mut self $(, _ : $argty)*) -> Option<$ret> { None }
         }
         $crate::r#trait!{@witness_defaults $hot, $($rest)*}
@@ -213,7 +213,7 @@ macro_rules! r#trait {
         $($rest:tt)*
     ) => {
         $crate::__paste! {
-            #[inline]
+            #[inline(always)]
             fn [<__try_ $method _as_ $hot:snake>](&mut self $(, _ : $argty)*) -> Option<()> { None }
         }
         $crate::r#trait!{@witness_defaults $hot, $($rest)*}
@@ -429,7 +429,7 @@ macro_rules! r#impl {
         $($rest:tt)*
     ) => {
         $crate::__paste! {
-            #[inline]
+            #[inline(always)]
             fn [<__try_ $method _as_ $type:snake>](&self $(, $arg: $argty)*) -> Option<$ret> {
                 Some(self.[<__spec_ $method>]($($arg),*))
             }
@@ -443,7 +443,7 @@ macro_rules! r#impl {
         $($rest:tt)*
     ) => {
         $crate::__paste! {
-            #[inline]
+            #[inline(always)]
             fn [<__try_ $method _as_ $type:snake>](&self $(, $arg: $argty)*) -> Option<()> {
                 self.[<__spec_ $method>]($($arg),*);
                 Some(())
@@ -458,7 +458,7 @@ macro_rules! r#impl {
         $($rest:tt)*
     ) => {
         $crate::__paste! {
-            #[inline]
+            #[inline(always)]
             fn [<__try_ $method _as_ $type:snake>](&mut self $(, $arg: $argty)*) -> Option<$ret> {
                 Some(self.[<__spec_ $method>]($($arg),*))
             }
@@ -472,7 +472,7 @@ macro_rules! r#impl {
         $($rest:tt)*
     ) => {
         $crate::__paste! {
-            #[inline]
+            #[inline(always)]
             fn [<__try_ $method _as_ $type:snake>](&mut self $(, $arg: $argty)*) -> Option<()> {
                 self.[<__spec_ $method>]($($arg),*);
                 Some(())
