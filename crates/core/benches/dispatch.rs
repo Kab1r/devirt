@@ -305,20 +305,141 @@ fn bench_scale(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_mixed_vec(c: &mut Criterion) {
-    let mut group = c.benchmark_group("mixed_vec");
+fn make_mixed_shapes_devirt() -> Vec<Box<dyn Shape>> {
+    vec![
+        Box::new(Circle { radius: 5.0 }),
+        Box::new(Rect { w: 3.0, h: 4.0 }),
+        Box::new(Triangle {
+            a: 3.0,
+            b: 4.0,
+            c: 5.0,
+        }),
+        Box::new(Hexagon { side: 2.0 }),
+    ]
+}
 
-    group.bench_function("devirt", |b| {
-        let shapes: Vec<Box<dyn Shape>> = vec![
-            Box::new(Circle { radius: 5.0 }),
-            Box::new(Rect { w: 3.0, h: 4.0 }),
-            Box::new(Triangle {
+fn make_mixed_shapes_plain() -> Vec<Box<dyn PlainShape>> {
+    vec![
+        Box::new(Circle { radius: 5.0 }),
+        Box::new(Rect { w: 3.0, h: 4.0 }),
+        Box::new(Triangle {
+            a: 3.0,
+            b: 4.0,
+            c: 5.0,
+        }),
+        Box::new(Hexagon { side: 2.0 }),
+    ]
+}
+
+fn make_mixed_shapes_branch() -> Vec<BranchShape> {
+    vec![
+        BranchShape {
+            ty: ShapeType::Circle,
+            data: BranchShapeData::Circle(Circle { radius: 5.0 }),
+        },
+        BranchShape {
+            ty: ShapeType::Rect,
+            data: BranchShapeData::Rect(Rect { w: 3.0, h: 4.0 }),
+        },
+        BranchShape {
+            ty: ShapeType::Triangle,
+            data: BranchShapeData::Triangle(Triangle {
                 a: 3.0,
                 b: 4.0,
                 c: 5.0,
             }),
-            Box::new(Hexagon { side: 2.0 }),
-        ];
+        },
+        BranchShape {
+            ty: ShapeType::Hexagon,
+            data: BranchShapeData::Hexagon(Hexagon { side: 2.0 }),
+        },
+    ]
+}
+
+fn make_hot_dominant_shapes_devirt() -> Vec<Box<dyn Shape>> {
+    vec![
+        Box::new(Circle { radius: 5.0 }),
+        Box::new(Circle { radius: 3.0 }),
+        Box::new(Circle { radius: 7.0 }),
+        Box::new(Circle { radius: 1.0 }),
+        Box::new(Rect { w: 3.0, h: 4.0 }),
+        Box::new(Rect { w: 5.0, h: 6.0 }),
+        Box::new(Rect { w: 2.0, h: 8.0 }),
+        Box::new(Rect { w: 1.0, h: 1.0 }),
+        Box::new(Triangle { a: 3.0, b: 4.0, c: 5.0 }),
+        Box::new(Hexagon { side: 2.0 }),
+    ]
+}
+
+fn make_hot_dominant_shapes_plain() -> Vec<Box<dyn PlainShape>> {
+    vec![
+        Box::new(Circle { radius: 5.0 }),
+        Box::new(Circle { radius: 3.0 }),
+        Box::new(Circle { radius: 7.0 }),
+        Box::new(Circle { radius: 1.0 }),
+        Box::new(Rect { w: 3.0, h: 4.0 }),
+        Box::new(Rect { w: 5.0, h: 6.0 }),
+        Box::new(Rect { w: 2.0, h: 8.0 }),
+        Box::new(Rect { w: 1.0, h: 1.0 }),
+        Box::new(Triangle { a: 3.0, b: 4.0, c: 5.0 }),
+        Box::new(Hexagon { side: 2.0 }),
+    ]
+}
+
+fn make_hot_dominant_shapes_branch() -> Vec<BranchShape> {
+    vec![
+        BranchShape {
+            ty: ShapeType::Circle,
+            data: BranchShapeData::Circle(Circle { radius: 5.0 }),
+        },
+        BranchShape {
+            ty: ShapeType::Circle,
+            data: BranchShapeData::Circle(Circle { radius: 3.0 }),
+        },
+        BranchShape {
+            ty: ShapeType::Circle,
+            data: BranchShapeData::Circle(Circle { radius: 7.0 }),
+        },
+        BranchShape {
+            ty: ShapeType::Circle,
+            data: BranchShapeData::Circle(Circle { radius: 1.0 }),
+        },
+        BranchShape {
+            ty: ShapeType::Rect,
+            data: BranchShapeData::Rect(Rect { w: 3.0, h: 4.0 }),
+        },
+        BranchShape {
+            ty: ShapeType::Rect,
+            data: BranchShapeData::Rect(Rect { w: 5.0, h: 6.0 }),
+        },
+        BranchShape {
+            ty: ShapeType::Rect,
+            data: BranchShapeData::Rect(Rect { w: 2.0, h: 8.0 }),
+        },
+        BranchShape {
+            ty: ShapeType::Rect,
+            data: BranchShapeData::Rect(Rect { w: 1.0, h: 1.0 }),
+        },
+        BranchShape {
+            ty: ShapeType::Triangle,
+            data: BranchShapeData::Triangle(Triangle {
+                a: 3.0,
+                b: 4.0,
+                c: 5.0,
+            }),
+        },
+        BranchShape {
+            ty: ShapeType::Hexagon,
+            data: BranchShapeData::Hexagon(Hexagon { side: 2.0 }),
+        },
+    ]
+}
+
+fn bench_mixed_vec(c: &mut Criterion) {
+    let mut group = c.benchmark_group("mixed_vec");
+
+    group.bench_function("devirt", |b| {
+        let shapes = make_mixed_shapes_devirt();
         b.iter(|| {
             let mut total = 0.0_f64;
             for s in &shapes {
@@ -329,16 +450,7 @@ fn bench_mixed_vec(c: &mut Criterion) {
     });
 
     group.bench_function("plain", |b| {
-        let shapes: Vec<Box<dyn PlainShape>> = vec![
-            Box::new(Circle { radius: 5.0 }),
-            Box::new(Rect { w: 3.0, h: 4.0 }),
-            Box::new(Triangle {
-                a: 3.0,
-                b: 4.0,
-                c: 5.0,
-            }),
-            Box::new(Hexagon { side: 2.0 }),
-        ];
+        let shapes = make_mixed_shapes_plain();
         b.iter(|| {
             let mut total = 0.0_f64;
             for s in &shapes {
@@ -349,28 +461,7 @@ fn bench_mixed_vec(c: &mut Criterion) {
     });
 
     group.bench_function("branch", |b| {
-        let shapes: Vec<BranchShape> = vec![
-            BranchShape {
-                ty: ShapeType::Circle,
-                data: BranchShapeData::Circle(Circle { radius: 5.0 }),
-            },
-            BranchShape {
-                ty: ShapeType::Rect,
-                data: BranchShapeData::Rect(Rect { w: 3.0, h: 4.0 }),
-            },
-            BranchShape {
-                ty: ShapeType::Triangle,
-                data: BranchShapeData::Triangle(Triangle {
-                    a: 3.0,
-                    b: 4.0,
-                    c: 5.0,
-                }),
-            },
-            BranchShape {
-                ty: ShapeType::Hexagon,
-                data: BranchShapeData::Hexagon(Hexagon { side: 2.0 }),
-            },
-        ];
+        let shapes = make_mixed_shapes_branch();
         b.iter(|| {
             let mut total = 0.0_f64;
             for s in &shapes {
@@ -380,20 +471,8 @@ fn bench_mixed_vec(c: &mut Criterion) {
         });
     });
 
-    // 90% hot types — the intended use case
     group.bench_function("devirt_hot_dominant", |b| {
-        let shapes: Vec<Box<dyn Shape>> = vec![
-            Box::new(Circle { radius: 5.0 }),
-            Box::new(Circle { radius: 3.0 }),
-            Box::new(Circle { radius: 7.0 }),
-            Box::new(Circle { radius: 1.0 }),
-            Box::new(Rect { w: 3.0, h: 4.0 }),
-            Box::new(Rect { w: 5.0, h: 6.0 }),
-            Box::new(Rect { w: 2.0, h: 8.0 }),
-            Box::new(Rect { w: 1.0, h: 1.0 }),
-            Box::new(Triangle { a: 3.0, b: 4.0, c: 5.0 }),
-            Box::new(Hexagon { side: 2.0 }),
-        ];
+        let shapes = make_hot_dominant_shapes_devirt();
         b.iter(|| {
             let mut total = 0.0_f64;
             for s in &shapes {
@@ -404,18 +483,7 @@ fn bench_mixed_vec(c: &mut Criterion) {
     });
 
     group.bench_function("plain_hot_dominant", |b| {
-        let shapes: Vec<Box<dyn PlainShape>> = vec![
-            Box::new(Circle { radius: 5.0 }),
-            Box::new(Circle { radius: 3.0 }),
-            Box::new(Circle { radius: 7.0 }),
-            Box::new(Circle { radius: 1.0 }),
-            Box::new(Rect { w: 3.0, h: 4.0 }),
-            Box::new(Rect { w: 5.0, h: 6.0 }),
-            Box::new(Rect { w: 2.0, h: 8.0 }),
-            Box::new(Rect { w: 1.0, h: 1.0 }),
-            Box::new(Triangle { a: 3.0, b: 4.0, c: 5.0 }),
-            Box::new(Hexagon { side: 2.0 }),
-        ];
+        let shapes = make_hot_dominant_shapes_plain();
         b.iter(|| {
             let mut total = 0.0_f64;
             for s in &shapes {
@@ -426,52 +494,7 @@ fn bench_mixed_vec(c: &mut Criterion) {
     });
 
     group.bench_function("branch_hot_dominant", |b| {
-        let shapes: Vec<BranchShape> = vec![
-            BranchShape {
-                ty: ShapeType::Circle,
-                data: BranchShapeData::Circle(Circle { radius: 5.0 }),
-            },
-            BranchShape {
-                ty: ShapeType::Circle,
-                data: BranchShapeData::Circle(Circle { radius: 3.0 }),
-            },
-            BranchShape {
-                ty: ShapeType::Circle,
-                data: BranchShapeData::Circle(Circle { radius: 7.0 }),
-            },
-            BranchShape {
-                ty: ShapeType::Circle,
-                data: BranchShapeData::Circle(Circle { radius: 1.0 }),
-            },
-            BranchShape {
-                ty: ShapeType::Rect,
-                data: BranchShapeData::Rect(Rect { w: 3.0, h: 4.0 }),
-            },
-            BranchShape {
-                ty: ShapeType::Rect,
-                data: BranchShapeData::Rect(Rect { w: 5.0, h: 6.0 }),
-            },
-            BranchShape {
-                ty: ShapeType::Rect,
-                data: BranchShapeData::Rect(Rect { w: 2.0, h: 8.0 }),
-            },
-            BranchShape {
-                ty: ShapeType::Rect,
-                data: BranchShapeData::Rect(Rect { w: 1.0, h: 1.0 }),
-            },
-            BranchShape {
-                ty: ShapeType::Triangle,
-                data: BranchShapeData::Triangle(Triangle {
-                    a: 3.0,
-                    b: 4.0,
-                    c: 5.0,
-                }),
-            },
-            BranchShape {
-                ty: ShapeType::Hexagon,
-                data: BranchShapeData::Hexagon(Hexagon { side: 2.0 }),
-            },
-        ];
+        let shapes = make_hot_dominant_shapes_branch();
         b.iter(|| {
             let mut total = 0.0_f64;
             for s in &shapes {
