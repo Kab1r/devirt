@@ -10,6 +10,9 @@ env:
   RUST_BACKTRACE: 1
   VERUS_TAG: release/0.2026.01.30.44ebdee
 
+permissions:
+  contents: read
+
 jobs:
   kani:
     name: Kani

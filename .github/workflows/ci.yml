@@ -10,6 +10,9 @@ env:
   # Must match vstd version in Cargo.toml. Update together when Renovate bumps vstd.
   VERUS_TAG: release/0.2026.01.30.44ebdee
 
+permissions:
+  contents: read
+
 jobs:
   test:
     name: Test
@@ -27,7 +30,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --workspace --exclude devirt-fuzz --all-targets
+      - run: cargo clippy --workspace --exclude devirt-fuzz --all-targets -- -D warnings
 
   bench-check:
     name: Bench compile check
