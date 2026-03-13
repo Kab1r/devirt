@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  # Must match vstd version in Cargo.toml. Update together when Renovate bumps vstd.
+  VERUS_TAG: release/0.2026.01.30.44ebdee
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace --exclude devirt-fuzz
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --exclude devirt-fuzz --all-targets
+
+  bench-check:
+    name: Bench compile check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo bench --workspace --exclude devirt-fuzz --no-run
+
+  fuzz-build:
+    name: Fuzz build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install cargo-fuzz
+      - run: cargo +nightly fuzz build dispatch
+
+  kani:
+    name: Kani
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Cache Kani
+        uses: actions/cache@v4
+        id: cache-kani
+        with:
+          path: |
+            ~/.cargo/bin/cargo-kani
+            ~/.kani
+          key: kani-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+      - name: Install Kani
+        if: steps.cache-kani.outputs.cache-hit != 'true'
+        run: |
+          cargo install kani-verifier --locked
+          cargo kani setup
+      - run: cargo kani --tests -p devirt
+
+  verus:
+    name: Verus
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Cache Verus
+        uses: actions/cache@v4
+        id: cache-verus
+        with:
+          path: ~/.verus
+          key: verus-${{ env.VERUS_TAG }}-${{ runner.os }}
+      - name: Install Verus
+        if: steps.cache-verus.outputs.cache-hit != 'true'
+        run: |
+          VERSION="${VERUS_TAG#release/}"
+          curl -fsSL "https://github.com/verus-lang/verus/releases/download/${VERUS_TAG}/verus-${VERSION}-x86-linux.zip" -o verus.zip
+          unzip verus.zip -d ~/.verus
+      - name: Add Verus to PATH
+        run: echo "$HOME/.verus" >> "$GITHUB_PATH"
+      - run: verus crates/verify/src/lib.rs --crate-type=lib
