@@ -9,7 +9,7 @@ env:
   RUST_BACKTRACE: 1
   # Kept in sync with the `vstd` crate version in Cargo.toml by Renovate
   # (see .github/renovate.json5 — the `verus` group bundles the two updates).
-  VERUS_TAG: release/0.2026.01.30.44ebdee
+  VERUS_TAG: release/0.2026.04.03.21dfcd2
 
 permissions:
   contents: read
@@ -85,7 +85,7 @@ jobs:
       - name: Install Rust toolchain required by Verus
         uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
         with:
-          toolchain: 1.93.0
+          toolchain: 1.94.0
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - name: Cache Verus
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
