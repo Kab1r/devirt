@@ -10,7 +10,7 @@ repository = "https://github.com/Kab1r/devirt"
 
 [workspace.dependencies]
 paste = "1"
-criterion = { version = "0.5", features = ["html_reports"] }
+criterion = { version = "0.8", features = ["html_reports"] }
 trybuild = "1"
 libfuzzer-sys = "0.4"
 arbitrary = { version = "1", features = ["derive"] }
