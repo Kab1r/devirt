@@ -3,9 +3,30 @@
   extends: ["config:best-practices", ":automergeStableNonMajor"],
   packageRules: [
     {
+      // The `vstd` crate (from crates.io) and the `verus` binary (pinned as
+      // `VERUS_TAG` in CI workflows, tracked via the custom manager below)
+      // must be upgraded together: `libvstd.rlib` shipped in the verus release
+      // zip has to match the `vstd` crate version compiled by `cargo test`.
+      // Grouping them ensures Renovate opens a single PR for the pair.
       groupName: "verus",
-      matchPackageNames: ["vstd"],
+      matchPackageNames: ["vstd", "verus-lang/verus"],
       automerge: true,
+    },
+  ],
+  customManagers: [
+    {
+      // Track `VERUS_TAG: release/0.YYYY.MM.DD.HASH` in GitHub Actions
+      // workflows against stable releases of verus-lang/verus. Rolling
+      // releases use `release/rolling/0.…` and are naturally excluded because
+      // the versioning regex anchors on `^release/0\.` with no `rolling/`
+      // segment.
+      customType: "regex",
+      description: "Keep VERUS_TAG in CI workflows in sync with the verus GitHub release",
+      managerFilePatterns: ["/^\\.github/workflows/[^/]+\\.ya?ml$/"],
+      matchStrings: ["VERUS_TAG:\\s*(?<currentValue>release/\\S+)"],
+      depNameTemplate: "verus-lang/verus",
+      datasourceTemplate: "github-releases",
+      versioningTemplate: "regex:^release/0\\.(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)\\.(?<build>.+)$",
     },
   ],
 }

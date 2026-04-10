@@ -7,7 +7,8 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  # Must match vstd version in Cargo.toml. Update together when Renovate bumps vstd.
+  # Kept in sync with the `vstd` crate version in Cargo.toml by Renovate
+  # (see .github/renovate.json5 — the `verus` group bundles the two updates).
   VERUS_TAG: release/0.2026.01.30.44ebdee
 
 permissions:
