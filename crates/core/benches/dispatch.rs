@@ -81,6 +81,10 @@ enum ShapeType {
 }
 
 struct BranchShape {
+    #[expect(
+        dead_code,
+        reason = "tag is not read; kept so layout mirrors a typical tag+payload dispatch struct"
+    )]
     ty: ShapeType,
     data: BranchShapeData,
 }

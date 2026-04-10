@@ -41,7 +41,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      # Verus ships as a prebuilt binary that shells out to a specific rustc
+      # via rustup. The required toolchain is pinned in the release's
+      # version.json and must match exactly — `stable` is not sufficient.
+      - name: Install Rust toolchain required by Verus
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.93.0
       - uses: Swatinem/rust-cache@v2
       - name: Cache Verus
         uses: actions/cache@v4
@@ -54,9 +60,14 @@ jobs:
         run: |
           VERSION="${VERUS_TAG#release/}"
           curl -fsSL "https://github.com/verus-lang/verus/releases/download/${VERUS_TAG}/verus-${VERSION}-x86-linux.zip" -o verus.zip
-          unzip verus.zip -d ~/.verus
+          mkdir -p ~/.verus
+          unzip -q verus.zip -d ~/.verus
       - name: Add Verus to PATH
-        run: echo "$HOME/.verus" >> "$GITHUB_PATH"
+        # The release zip extracts to a `verus-x86-linux/` subdirectory that
+        # contains the `verus` binary alongside its runtime assets (z3,
+        # libvstd.rlib, vstd.vir, etc.). The binary must stay next to those
+        # files, so we add the subdirectory itself to PATH.
+        run: echo "$HOME/.verus/verus-x86-linux" >> "$GITHUB_PATH"
       - run: verus crates/verify/src/lib.rs --crate-type=lib
 
   fuzz:
