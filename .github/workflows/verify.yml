@@ -41,14 +41,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      # Verus ships as a prebuilt binary that shells out to a specific rustc
-      # via rustup. The required toolchain is pinned in the release's
-      # version.json and must match exactly — `stable` is not sufficient.
-      - name: Install Rust toolchain required by Verus
-        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
-        with:
-          toolchain: 1.94.0
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - name: Cache Verus
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         id: cache-verus
@@ -62,6 +54,21 @@ jobs:
           curl -fsSL "https://github.com/verus-lang/verus/releases/download/${VERUS_TAG}/verus-${VERSION}-x86-linux.zip" -o verus.zip
           mkdir -p ~/.verus
           unzip -q verus.zip -d ~/.verus
+      - name: Determine Rust toolchain required by Verus
+        # Verus ships as a prebuilt binary that shells out to a specific rustc
+        # via rustup — `stable` is not sufficient and the required version
+        # changes across releases. Read it from the release's version.json
+        # so that Renovate only has to bump `VERUS_TAG`.
+        id: verus-toolchain
+        run: |
+          toolchain=$(jq -r '.verus.toolchain' ~/.verus/verus-x86-linux/version.json)
+          toolchain="${toolchain%-x86_64-unknown-linux-gnu}"
+          echo "toolchain=$toolchain" >> "$GITHUB_OUTPUT"
+      - name: Install Rust toolchain required by Verus
+        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
+        with:
+          toolchain: ${{ steps.verus-toolchain.outputs.toolchain }}
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - name: Add Verus to PATH
         # The release zip extracts to a `verus-x86-linux/` subdirectory that
         # contains the `verus` binary alongside its runtime assets (z3,
