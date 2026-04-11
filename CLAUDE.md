@@ -82,7 +82,7 @@ Recursive expansion (rather than `$()+` repetition) avoids macro_rules metavar d
 - **Miri** (`cargo +nightly miri test -p devirt --lib`): runs the `#[cfg(test)] mod primitives` harnesses — fat pointer layout, vtable identity, and end-to-end `&self` / `&mut self` / `Box<dyn>` dispatch — under Stacked/Tree Borrows to catch aliasing violations in the unsafe transmute and `&mut` paths.
 - **UI tests** (`tests/ui/`): trybuild compile tests; `.stderr` files capture expected error output for compile-fail cases.
 - **Kani** (`tests/kani.rs`): bounded model checker proofs for N=1,2,3 hot types, plus a `mod vt` section that directly verifies vtable-primitive soundness.
-- **Verus** (`crates/verify/`): full functional correctness proofs (Properties A, B, C) for the abstract dispatch spec, plus a `vtable_refines_witness` refinement lemma tying the new `vtable_dispatch_spec` to the existing `dispatch_spec`.
+- **Verus** (`crates/verify/`): full functional correctness proofs (Properties A, B, C) for the abstract `dispatch_spec`, plus a refinement lemma that proves `vtable_dispatch_spec` (a direct recursion over `(vt, hot_vts, values)` modelling the vtable-comparison shim) produces the same result as `dispatch_spec` on a projected `Seq<Option<u64>>`, so Properties A/B/C transfer to the vtable-comparison implementation without reproof.
 
 ## Key Constraints
 

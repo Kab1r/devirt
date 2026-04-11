@@ -7,10 +7,10 @@
 //! called directly (fully inlined under LTO). On miss, the shim falls through
 //! to a single vtable call via the hidden `__spec_*` method.
 //!
-//! Unlike the older witness-method approach, this eliminates the indirect
-//! call entirely on hot paths — there is no vtable call on the hot-dispatch
-//! branch, only a `cmp + je` against a RIP-relative vtable address.
-//! Callers use plain `dyn Trait` — no wrappers, no special calls.
+//! This eliminates the indirect call entirely on hot paths — there is no
+//! vtable call on the hot-dispatch branch, only a `cmp + je` against a
+//! RIP-relative vtable address. Callers use plain `dyn Trait` — no
+//! wrappers, no special calls.
 //!
 //! # Architecture
 //!
@@ -120,9 +120,12 @@ pub use paste::paste as __paste;
 
 /// Declares a trait with transparent devirtualization.
 ///
-/// Hot types listed in brackets get witness-method dispatch (single vtable call).
-/// Cold types fall back to normal vtable dispatch.
-/// Callers use plain `dyn Trait` — no wrappers, no special calls.
+/// Hot types listed in brackets get vtable-pointer-comparison dispatch:
+/// at each call site the dispatch shim compares the runtime vtable
+/// pointer against the compile-time-known vtable for each hot type and,
+/// on match, calls the concrete method directly (fully inlined under
+/// LTO). Cold types fall through to normal vtable dispatch. Callers use
+/// plain `dyn Trait` — no wrappers, no special calls.
 ///
 /// # Syntax
 ///

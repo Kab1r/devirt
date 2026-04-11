@@ -512,11 +512,12 @@ fn bench_mixed_vec(c: &mut Criterion) {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Shuffled 80/20 hot/cold benchmark — the headline workload from the
-// vtable-comparison RFC. Unlike `mixed_vec`, this group places hot and
-// cold shapes in a deterministically-shuffled order so the CPU's
-// indirect branch target buffer cannot learn the call pattern, making
-// plain vtable dispatch pay full indirect-call latency on every call.
+// Shuffled 80/20 hot/cold benchmark. Unlike `mixed_vec`, this group
+// places hot and cold shapes in a deterministically-shuffled order so
+// the CPU's indirect branch target buffer cannot learn the call
+// pattern, making plain vtable dispatch pay full indirect-call latency
+// on every call. This is the scenario where vtable-pointer comparison
+// shows its biggest speedup.
 // ─────────────────────────────────────────────────────────────────────
 
 fn make_shuffled_devirt(n: usize) -> Vec<Box<dyn Shape>> {

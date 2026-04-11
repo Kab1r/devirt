@@ -1,6 +1,6 @@
 //! Demonstrates [`devirt`] with a `Shape` trait across hot and cold types.
 //!
-//! `Circle` and `Rect` are listed as hot types and get witness-method dispatch.
+//! `Circle` and `Rect` are listed as hot types and get vtable-pointer-comparison dispatch.
 //! `Triangle` and `Hexagon` fall back to normal vtable dispatch.
 //! All four are used identically through `dyn Shape`.
 //!
@@ -31,7 +31,9 @@ devirt::r#trait! {
     }
 }
 
-// 2. Implement — normal-looking impl blocks; [hot] overrides witness methods
+// 2. Implement — normal-looking impl blocks; [hot] marks a type as listed
+//    in the trait's hot list above (documentary — hot-path dispatch is
+//    driven entirely by the trait declaration, not by per-impl overrides)
 devirt::r#impl!(Shape for Circle [hot] {
     fn area(&self) -> f64 {
         core::f64::consts::PI * self.radius * self.radius
