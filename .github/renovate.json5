@@ -12,6 +12,15 @@
       matchPackageNames: ["vstd", "verus-lang/verus"],
       automerge: true,
     },
+    {
+      // `paste` (1.0.15) is feature-complete, not abandoned: dtolnay marked
+      // the crate as no longer maintained because it does what it needs to
+      // and requires no further changes. We rely on it at macro-expansion
+      // time and have no plans to migrate, so silence Renovate's abandonment
+      // warning by pushing the threshold far into the future.
+      matchPackageNames: ["paste"],
+      abandonmentThreshold: "10 years",
+    },
   ],
   customManagers: [
     {
