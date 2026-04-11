@@ -22,7 +22,10 @@ lto = "thin"
 codegen-units = 1
 
 [workspace.lints.rust]
-unsafe_code = "forbid"
+# `deny` (not `forbid`) so the `devirt` core crate can locally
+# `#[allow(unsafe_code)]` on the vtable-pointer primitives it uses for
+# devirtualization. All other crates still forbid unsafe by default.
+unsafe_code = "deny"
 missing_docs = "warn"
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
 

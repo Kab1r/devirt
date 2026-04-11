@@ -1,22 +1,35 @@
 //! Transparent devirtualization for Rust trait objects, with `#![no_std]` support.
 //!
-//! Hot types get witness-method dispatch: a thin inlined check routes directly
-//! to the concrete type's method, avoiding the vtable.
-//! Cold types fall back to normal vtable dispatch.
+//! Hot types get **vtable-pointer-comparison dispatch**: the dispatch shim
+//! extracts the vtable pointer from the `&dyn Trait` fat pointer and compares
+//! it against the compile-time-known vtable address for each hot type. On
+//! match, the data pointer is reinterpreted as `&HotType` and the method is
+//! called directly (fully inlined under LTO). On miss, the shim falls through
+//! to a single vtable call via the hidden `__spec_*` method.
+//!
+//! Unlike the older witness-method approach, this eliminates the indirect
+//! call entirely on hot paths — there is no vtable call on the hot-dispatch
+//! branch, only a `cmp + je` against a RIP-relative vtable address.
 //! Callers use plain `dyn Trait` — no wrappers, no special calls.
 //!
 //! # Architecture
 //!
 //! `r#trait!` generates:
-//! - A hidden inner trait `__XImpl` with `__spec_*` methods and
-//!   `__try_*_as_*` witness methods (one default per hot type per method)
-//! - A public trait `X` with devirtualized default methods
+//! - A hidden inner trait `__XImpl` with `__spec_*` method declarations
+//! - Two `#[doc(hidden)]` inherent helpers on `dyn X`:
+//!   `__devirt_raw_parts` (extracts `[data, vtable]` from a fat pointer)
+//!   and `__devirt_vtable_for::<T>()` (returns the compiler-assigned
+//!   vtable address for `(T, X)`)
+//! - A public trait `X` with default methods whose bodies compare the
+//!   runtime vtable pointer against each hot type's vtable and dispatch
+//!   directly on match, or fall through to `__spec_*` otherwise
 //! - A blanket impl: `impl<T: __XImpl> X for T {}`
 //!
 //! `r#impl!` generates:
 //! - `impl __XImpl for ConcreteType { ... }` with the `__spec_*` bodies
-//! - When marked `[hot]`, also overrides the matching witness methods so
-//!   dispatch bypasses the vtable for this type
+//! - The `[hot]` marker is accepted for backward compatibility but is
+//!   purely documentary now: the hot-path optimization is driven entirely
+//!   by the trait's hot-type list, not by per-impl overrides
 //!
 //! # Usage
 //!
@@ -28,12 +41,12 @@
 //!     }
 //! }
 //!
-//! // Hot type: witness override — one direct call, no vtable
+//! // Hot type — vtable-compare match, directly inlined under LTO
 //! devirt::r#impl!(MyTrait for HotType1 [hot] {
 //!     fn method(&self) -> ReturnType { ... }
 //! });
 //!
-//! // Cold type: falls back to vtable
+//! // Cold type — vtable-compare miss, falls back to vtable call
 //! devirt::r#impl!(MyTrait for ColdType {
 //!     fn method(&self) -> ReturnType { ... }
 //! });
@@ -41,9 +54,11 @@
 //!
 //! # Required: enable LTO
 //!
-//! This crate relies on cross-function inlining to eliminate dispatch overhead.
-//! Without LTO, witness methods may not inline and performance will be **worse**
-//! than plain `dyn Trait`.
+//! This crate relies on cross-function inlining and cross-CGU vtable
+//! deduplication to eliminate dispatch overhead. Without LTO, the helper
+//! fns may not inline and the vtable comparison may always miss (because
+//! the trait and the hot type's impl live in different codegen units),
+//! degrading to plain vtable dispatch.
 //!
 //! ```toml
 //! [profile.release]
@@ -53,15 +68,31 @@
 //!
 //! # Performance characteristics
 //!
-//! With LTO enabled, hot-type dispatch compiles to the same machine code as a
-//! direct method call — zero overhead vs plain `dyn Trait`. Cold types pay a
-//! small penalty: each hot type adds one inlined branch (returning `None`) to
-//! the cold path before the vtable fallback. This means cold-path overhead
-//! grows linearly with the number of hot types.
+//! With LTO enabled, hot-type dispatch is a single `cmp + je` against a
+//! RIP-relative vtable address followed by an inlined method body — **no
+//! indirect call**. Cold types pay a small branch-per-hot-type penalty on
+//! the dispatch shim before the vtable fallback.
 //!
 //! The crate is most effective when hot types dominate the population (80%+
-//! of trait objects). In mixed collections with many cold types, the cold-path
-//! penalty can outweigh the hot-path gains.
+//! of trait objects). It is especially effective on *shuffled* collections
+//! where the CPU's indirect branch predictor cannot learn the call pattern.
+//!
+//! # Safety
+//!
+//! The dispatch shim uses three small `unsafe` operations:
+//!
+//! 1. `transmute::<*const dyn Trait, [usize; 2]>` to split a fat pointer
+//!    into `(data, vtable)` halves. Safe because `*const dyn Trait` is a
+//!    two-usize fat pointer — verified by a compile-time `size_of` assertion
+//!    and a `#[cfg(test)]` ordering check.
+//! 2. Reinterpreting the data half as `*const HotType` / `*mut HotType` on
+//!    a vtable match. Safe because distinct types have distinct vtables
+//!    (vtables encode size, alignment, and drop glue), and the compiler
+//!    deduplicates vtables for the same `(Type, Trait)` pair under LTO.
+//! 3. Coercing a dangling `*const T` to `*const dyn Trait` inside
+//!    `__devirt_vtable_for` to read the vtable address. Safe because
+//!    coercion is a metadata-attaching operation that does not dereference
+//!    the data pointer.
 //!
 //! # Limitations
 //!
@@ -70,13 +101,16 @@
 //! impl requires `dyn Trait` to work, so violating object safety will produce
 //! errors pointing at the generated impl rather than the method definition.
 //!
-//! **Snake-case name collisions.** Hot type names are converted to `snake_case`
-//! (via `paste`'s `:snake`) for witness method names. Two types that produce
-//! the same `snake_case` form (e.g., `HTTPClient` and `HttpClient` both become
-//! `http_client`) will generate conflicting method names. Use distinct type
-//! names when this would be ambiguous.
+//! **Hot types must be `'static`.** The vtable-probe helper coerces a
+//! `*const T` to `*const dyn Trait`, which inherits `dyn Trait`'s default
+//! `'static` bound. Types with borrowed fields cannot currently be listed
+//! as hot types.
 
 #![no_std]
+// SAFETY: the crate's entire purpose is safely-encapsulated unsafe dispatch.
+// Individual unsafe sites are documented with `SAFETY` comments and verified
+// by Miri, Kani, and Verus.
+#![allow(unsafe_code)]
 
 #[cfg(kani)]
 extern crate kani;
@@ -118,15 +152,102 @@ macro_rules! r#trait {
             #[doc(hidden)]
             $vis trait [<__ $trait_name Impl>] {
                 $crate::r#trait!{@spec_decl $($methods)*}
-                $crate::r#trait!{@all_witness_defaults [$($hot),+], $($methods)*}
             }
 
+            // Compile-time sanity check: `*const dyn Trait` must be a fat
+            // pointer of exactly two `usize`s. If a future Rust edition
+            // changes this, compilation fails loudly rather than producing
+            // UB at runtime.
+            const _: () = assert!(
+                ::core::mem::size_of::<*const dyn $trait_name>()
+                    == 2 * ::core::mem::size_of::<usize>()
+            );
+
+            // Inherent helpers on `dyn $trait_name` that expose the fat
+            // pointer's `(data, vtable)` halves and the compiler-assigned
+            // vtable address for a concrete hot type. These are `#[inline(
+            // always)]` so LTO folds them into the dispatch shim.
+            impl<'__devirt> dyn $trait_name + '__devirt {
+                /// Split a fat pointer into `[data, vtable]`.
+                #[doc(hidden)]
+                #[inline(always)]
+                pub fn __devirt_raw_parts(this: &Self) -> [usize; 2] {
+                    // SAFETY: `&(dyn $trait_name + '_)` is a two-`usize`
+                    // fat pointer (verified by the compile-time
+                    // `size_of` assertion above) laid out as
+                    // `[data, vtable]`. Transmuting to `[usize; 2]`
+                    // only reinterprets bits — the data half is still
+                    // borrowed for the duration of `this`, so the
+                    // result may not outlive the borrow.
+                    unsafe { ::core::mem::transmute::<
+                        &Self, [usize; 2],
+                    >(this) }
+                }
+
+                /// Vtable pointer for the `(T, Self)` pair.
+                #[doc(hidden)]
+                #[inline(always)]
+                pub fn __devirt_vtable_for<
+                    T: [<__ $trait_name Impl>] + 'static,
+                >() -> usize {
+                    // A dangling, non-null, aligned `*const T`. We never
+                    // dereference it — the coercion below only reads the
+                    // vtable metadata the compiler attaches.
+                    let fake: *const T = ::core::ptr::without_provenance(
+                        ::core::mem::align_of::<T>(),
+                    );
+                    // Coercion is a metadata-attaching op; the resulting
+                    // fat pointer's vtable half is the `(T, $trait_name)`
+                    // vtable selected by the compiler. Its data half is
+                    // `fake`, which we discard.
+                    let fat: *const Self = fake;
+                    // SAFETY: `*const Self` (dyn trait fat pointer) is
+                    // two `usize`s by the compile-time assertion above.
+                    // We read only the vtable half; the dangling data
+                    // half is discarded without dereferencing.
+                    let __parts: [usize; 2] = unsafe {
+                        ::core::mem::transmute::<
+                            *const Self, [usize; 2],
+                        >(fat)
+                    };
+                    __parts[1]
+                }
+            }
+
+            // Inherent dispatch methods on `dyn $trait_name`. These
+            // contain the vtable-comparison hot-path and take priority
+            // over the trait's default methods during method resolution,
+            // so a call like `dyn_trait.method()` reaches this block
+            // before falling back to the trait method. Putting the cast
+            // `self as *const dyn $trait_name` here (where `Self = dyn
+            // $trait_name`) avoids the `Self: Sized` requirement that
+            // would otherwise arise in a default method body.
+            impl<'__devirt> dyn $trait_name + '__devirt {
+                $crate::r#trait!{
+                    @inherent_decl
+                    [<__ $trait_name Impl>],
+                    $trait_name,
+                    [$($hot),+],
+                    $($methods)*
+                }
+            }
+
+            // The public trait is a thin marker over the hidden inner
+            // trait: it carries no methods of its own, so `dyn
+            // $trait_name` has no trait methods to conflict with the
+            // inherent dispatch methods emitted above. Methods named
+            // from the user's declaration resolve unambiguously to the
+            // inherent block.
+            //
+            // Concrete-type callers that want to bypass dispatch
+            // entirely can either call `<$trait_name>::$method` via
+            // an explicit dyn coercion `(&t as &dyn $trait_name).$method
+            // (...)` or call `<T as __${trait_name}Impl>::__spec_$method
+            // (&t, ...)` via UFCS.
             $(#[$meta])*
-            $vis trait $trait_name: [<__ $trait_name Impl>] {
-                $crate::r#trait!{@outer_decl [<__ $trait_name Impl>], [$($hot),+], $($methods)*}
-            }
+            $vis trait $trait_name: [<__ $trait_name Impl>] {}
 
-            impl<T: [<__ $trait_name Impl>]> $trait_name for T {}
+            impl<T: [<__ $trait_name Impl>] + ?Sized> $trait_name for T {}
         }
     };
 
@@ -156,214 +277,268 @@ macro_rules! r#trait {
 
     (@spec_decl) => {};
 
-    // ── @all_witness_defaults ───────────────────────────────────────────────
-
-    (@all_witness_defaults [$first:ty $(, $rest:ty)*], $($methods:tt)*) => {
-        $crate::r#trait!{@witness_defaults $first, $($methods)*}
-        $crate::r#trait!{@all_witness_defaults [$($rest),*], $($methods)*}
-    };
-
-    (@all_witness_defaults [], $($methods:tt)*) => {};
-
-    // ── @witness_defaults ───────────────────────────────────────────────────
-
-    // &self with explicit return type
-    (@witness_defaults $hot:ty,
-        $(#[$_attr:meta])*
-        fn $method:ident(&self $(, $arg:ident : $argty:ty)*) -> $ret:ty;
-        $($rest:tt)*
-    ) => {
-        $crate::__paste! {
-            #[inline(always)]
-            fn [<__try_ $method _as_ $hot:snake>](&self $(, _ : $argty)*) -> Option<$ret> { None }
-        }
-        $crate::r#trait!{@witness_defaults $hot, $($rest)*}
-    };
-
-    // &self without return type
-    (@witness_defaults $hot:ty,
-        $(#[$_attr:meta])*
-        fn $method:ident(&self $(, $arg:ident : $argty:ty)*);
-        $($rest:tt)*
-    ) => {
-        $crate::__paste! {
-            #[inline(always)]
-            fn [<__try_ $method _as_ $hot:snake>](&self $(, _ : $argty)*) -> Option<()> { None }
-        }
-        $crate::r#trait!{@witness_defaults $hot, $($rest)*}
-    };
-
-    // &mut self with explicit return type
-    (@witness_defaults $hot:ty,
-        $(#[$_attr:meta])*
-        fn $method:ident(&mut self $(, $arg:ident : $argty:ty)*) -> $ret:ty;
-        $($rest:tt)*
-    ) => {
-        $crate::__paste! {
-            #[inline(always)]
-            fn [<__try_ $method _as_ $hot:snake>](&mut self $(, _ : $argty)*) -> Option<$ret> { None }
-        }
-        $crate::r#trait!{@witness_defaults $hot, $($rest)*}
-    };
-
-    // &mut self without return type
-    (@witness_defaults $hot:ty,
-        $(#[$_attr:meta])*
-        fn $method:ident(&mut self $(, $arg:ident : $argty:ty)*);
-        $($rest:tt)*
-    ) => {
-        $crate::__paste! {
-            #[inline(always)]
-            fn [<__try_ $method _as_ $hot:snake>](&mut self $(, _ : $argty)*) -> Option<()> { None }
-        }
-        $crate::r#trait!{@witness_defaults $hot, $($rest)*}
-    };
-
-    (@witness_defaults $hot:ty,) => {};
-
-    // ── @outer_decl ─────────────────────────────────────────────────────────
+    // ── @inherent_decl ──────────────────────────────────────────────────────
+    //
+    // Emits inherent methods on `impl dyn $trait_name { ... }` that do
+    // the vtable-comparison dispatch. Because `Self = dyn $trait_name`
+    // in this context, the cast `self as *const dyn $trait_name` is a
+    // simple reference-to-pointer cast with no `Sized` requirement.
 
     // &self, non-void
-    (@outer_decl $inner:ident, [$($hot:ty),+],
+    (@inherent_decl $inner:ident, $trait_name:ident, [$($hot:ty),+],
         $(#[$attr:meta])*
         fn $method:ident(&self $(, $arg:ident : $argty:ty)*) -> $ret:ty;
         $($rest:tt)*
     ) => {
         $crate::__paste! {
-            $(#[$attr])*
             #[inline]
-            fn $method(&self $(, $arg: $argty)*) -> $ret {
-                $crate::r#trait!(@dispatch_ref $inner, self, $method, ($($arg),*), [$($hot),+])
+            #[doc(hidden)]
+            pub fn $method(&self $(, $arg: $argty)*) -> $ret {
+                $crate::r#trait!(
+                    @dispatch_ref
+                    $inner, $trait_name, self, $method, ($($arg),*), [$($hot),+]
+                )
             }
         }
-        $crate::r#trait!{@outer_decl $inner, [$($hot),+], $($rest)*}
+        $crate::r#trait!{@inherent_decl $inner, $trait_name, [$($hot),+], $($rest)*}
     };
 
     // &self, void
-    (@outer_decl $inner:ident, [$($hot:ty),+],
+    (@inherent_decl $inner:ident, $trait_name:ident, [$($hot:ty),+],
         $(#[$attr:meta])*
         fn $method:ident(&self $(, $arg:ident : $argty:ty)*);
         $($rest:tt)*
     ) => {
         $crate::__paste! {
-            $(#[$attr])*
             #[inline]
-            fn $method(&self $(, $arg: $argty)*) {
-                $crate::r#trait!(@dispatch_void $inner, self, $method, ($($arg),*), [$($hot),+])
+            #[doc(hidden)]
+            pub fn $method(&self $(, $arg: $argty)*) {
+                $crate::r#trait!(
+                    @dispatch_void
+                    $inner, $trait_name, self, $method, ($($arg),*), [$($hot),+]
+                )
             }
         }
-        $crate::r#trait!{@outer_decl $inner, [$($hot),+], $($rest)*}
+        $crate::r#trait!{@inherent_decl $inner, $trait_name, [$($hot),+], $($rest)*}
     };
 
     // &mut self, non-void
-    (@outer_decl $inner:ident, [$($hot:ty),+],
+    (@inherent_decl $inner:ident, $trait_name:ident, [$($hot:ty),+],
         $(#[$attr:meta])*
         fn $method:ident(&mut self $(, $arg:ident : $argty:ty)*) -> $ret:ty;
         $($rest:tt)*
     ) => {
         $crate::__paste! {
-            $(#[$attr])*
             #[inline]
-            fn $method(&mut self $(, $arg: $argty)*) -> $ret {
-                $crate::r#trait!(@dispatch_mut $inner, self, $method, ($($arg),*), [$($hot),+])
+            #[doc(hidden)]
+            pub fn $method(&mut self $(, $arg: $argty)*) -> $ret {
+                $crate::r#trait!(
+                    @dispatch_mut
+                    $inner, $trait_name, self, $method, ($($arg),*), [$($hot),+]
+                )
             }
         }
-        $crate::r#trait!{@outer_decl $inner, [$($hot),+], $($rest)*}
+        $crate::r#trait!{@inherent_decl $inner, $trait_name, [$($hot),+], $($rest)*}
     };
 
     // &mut self, void
-    (@outer_decl $inner:ident, [$($hot:ty),+],
+    (@inherent_decl $inner:ident, $trait_name:ident, [$($hot:ty),+],
         $(#[$attr:meta])*
         fn $method:ident(&mut self $(, $arg:ident : $argty:ty)*);
         $($rest:tt)*
     ) => {
         $crate::__paste! {
-            $(#[$attr])*
             #[inline]
-            fn $method(&mut self $(, $arg: $argty)*) {
-                $crate::r#trait!(@dispatch_mut_void $inner, self, $method, ($($arg),*), [$($hot),+])
+            #[doc(hidden)]
+            pub fn $method(&mut self $(, $arg: $argty)*) {
+                $crate::r#trait!(
+                    @dispatch_mut_void
+                    $inner, $trait_name, self, $method, ($($arg),*), [$($hot),+]
+                )
             }
         }
-        $crate::r#trait!{@outer_decl $inner, [$($hot),+], $($rest)*}
+        $crate::r#trait!{@inherent_decl $inner, $trait_name, [$($hot),+], $($rest)*}
     };
 
-    (@outer_decl $inner:ident, [$($hot:ty),+],) => {};
+    (@inherent_decl $inner:ident, $trait_name:ident, [$($hot:ty),+],) => {};
 
     // ── @dispatch_ref: &self, non-void ─────────────────────────────────────
+    //
+    // Expands to: split the fat pointer into `[data, vtable]`, then for
+    // each hot type compare the extracted vtable against the
+    // compile-time-known vtable for `(HotType, Trait)`. On match,
+    // reinterpret the data pointer as `&HotType` and tail-call the hot
+    // type's `__spec_*` method directly (fully inlined under LTO). On
+    // full miss, fall through to a single `__spec_*` call via the inner
+    // trait bound, which compiles to the usual vtable indirect call.
+    //
+    // Hot types are consumed by recursive expansion (rather than `$()+`
+    // repetition) so the macro parser doesn't have to reconcile the
+    // mismatched repetition depths of `$hot` and `$arg`.
 
-    (@dispatch_ref $inner:ident, $this:tt, $method:ident, ($($arg:expr),*),
-        [$first:ty $(, $rest:ty)*]
+    (@dispatch_ref $inner:ident, $trait_name:ident, $this:tt, $method:ident,
+        ($($arg:expr),*), [$($hot:ty),+]
     ) => {{
-        if let Some(__devirt_v) =
-            $crate::__paste! { $inner::[<__try_ $method _as_ $first:snake>] }($this $(, $arg)*)
-        {
-            return __devirt_v;
-        }
-        $crate::r#trait!(@dispatch_ref $inner, $this, $method, ($($arg),*), [$($rest),*])
+        let __raw: [usize; 2] =
+            <dyn $trait_name>::__devirt_raw_parts($this);
+        $crate::r#trait!(@dispatch_ref_chain
+            $inner, $trait_name, $this, $method, ($($arg),*), [$($hot),+], __raw)
     }};
 
-    (@dispatch_ref $inner:ident, $this:tt, $method:ident, ($($arg:expr),*), []) => {
+    (@dispatch_ref_chain $inner:ident, $trait_name:ident, $this:tt, $method:ident,
+        ($($arg:expr),*), [$first:ty $(, $rest:ty)*], $raw:ident
+    ) => {{
+        if $raw[1] == <dyn $trait_name>::__devirt_vtable_for::<$first>() {
+            // Bind the data-half to a local `*const $first` outside
+            // any `unsafe` block so that no metavariable is expanded
+            // inside `unsafe { ... }` — clippy's
+            // `macro_metavars_in_unsafe` lint flags the latter.
+            let __p: *const $first = $raw[0] as *const $first;
+            // SAFETY: vtable identity implies type identity. The data
+            // half is the original `&$first` the caller coerced into
+            // the fat pointer, valid for at least the lifetime of
+            // `$this`'s borrow.
+            let __concrete: &$first = unsafe { &*__p };
+            return $crate::__paste! {
+                __concrete.[<__spec_ $method>]($($arg),*)
+            };
+        }
+        $crate::r#trait!(@dispatch_ref_chain
+            $inner, $trait_name, $this, $method, ($($arg),*), [$($rest),*], $raw)
+    }};
+
+    (@dispatch_ref_chain $inner:ident, $trait_name:ident, $this:tt, $method:ident,
+        ($($arg:expr),*), [], $raw:ident
+    ) => {
         $crate::__paste! { $inner::[<__spec_ $method>] }($this $(, $arg)*)
     };
 
     // ── @dispatch_void: &self, void ─────────────────────────────────────────
 
-    (@dispatch_void $inner:ident, $this:tt, $method:ident, ($($arg:expr),*),
-        [$first:ty $(, $rest:ty)*]
+    (@dispatch_void $inner:ident, $trait_name:ident, $this:tt, $method:ident,
+        ($($arg:expr),*), [$($hot:ty),+]
     ) => {{
-        if $crate::__paste! { $inner::[<__try_ $method _as_ $first:snake>] }($this $(, $arg)*).is_some() {
-            return;
-        }
-        $crate::r#trait!(@dispatch_void $inner, $this, $method, ($($arg),*), [$($rest),*])
+        let __raw: [usize; 2] =
+            <dyn $trait_name>::__devirt_raw_parts($this);
+        $crate::r#trait!(@dispatch_void_chain
+            $inner, $trait_name, $this, $method, ($($arg),*), [$($hot),+], __raw)
     }};
 
-    (@dispatch_void $inner:ident, $this:tt, $method:ident, ($($arg:expr),*), []) => {
+    (@dispatch_void_chain $inner:ident, $trait_name:ident, $this:tt, $method:ident,
+        ($($arg:expr),*), [$first:ty $(, $rest:ty)*], $raw:ident
+    ) => {{
+        if $raw[1] == <dyn $trait_name>::__devirt_vtable_for::<$first>() {
+            let __p: *const $first = $raw[0] as *const $first;
+            // SAFETY: see @dispatch_ref_chain above.
+            let __concrete: &$first = unsafe { &*__p };
+            $crate::__paste! {
+                __concrete.[<__spec_ $method>]($($arg),*);
+            }
+            return;
+        }
+        $crate::r#trait!(@dispatch_void_chain
+            $inner, $trait_name, $this, $method, ($($arg),*), [$($rest),*], $raw)
+    }};
+
+    (@dispatch_void_chain $inner:ident, $trait_name:ident, $this:tt, $method:ident,
+        ($($arg:expr),*), [], $raw:ident
+    ) => {
         $crate::__paste! { $inner::[<__spec_ $method>] }($this $(, $arg)*)
     };
 
     // ── @dispatch_mut: &mut self, non-void ─────────────────────────────────
+    //
+    // The `&mut` arms go through a raw `*mut` dereference rather than
+    // constructing a named `&mut $hot` binding. This keeps the hot-branch
+    // reborrow scoped to the single method call expression and avoids
+    // aliasing the still-live `&mut dyn $trait_name` under Stacked
+    // Borrows. The cold fallback path uses `self` directly.
 
-    (@dispatch_mut $inner:ident, $this:tt, $method:ident, ($($arg:expr),*),
-        [$first:ty $(, $rest:ty)*]
+    (@dispatch_mut $inner:ident, $trait_name:ident, $this:tt, $method:ident,
+        ($($arg:expr),*), [$($hot:ty),+]
     ) => {{
-        if let Some(__devirt_v) =
-            $crate::__paste! { $inner::[<__try_ $method _as_ $first:snake>] }(&mut *$this $(, $arg)*)
-        {
-            return __devirt_v;
-        }
-        $crate::r#trait!(@dispatch_mut $inner, $this, $method, ($($arg),*), [$($rest),*])
+        // Shared reborrow of `&mut dyn $trait_name` to read the fat
+        // pointer halves. The reborrow is scoped to the call to
+        // `__devirt_raw_parts` and released before we construct any
+        // `&mut $first` on the hot path, so there is no overlapping
+        // mutable alias.
+        let __raw: [usize; 2] =
+            <dyn $trait_name>::__devirt_raw_parts(&*$this);
+        $crate::r#trait!(@dispatch_mut_chain
+            $inner, $trait_name, $this, $method, ($($arg),*), [$($hot),+], __raw)
     }};
 
-    (@dispatch_mut $inner:ident, $this:tt, $method:ident, ($($arg:expr),*), []) => {
+    (@dispatch_mut_chain $inner:ident, $trait_name:ident, $this:tt, $method:ident,
+        ($($arg:expr),*), [$first:ty $(, $rest:ty)*], $raw:ident
+    ) => {{
+        if $raw[1] == <dyn $trait_name>::__devirt_vtable_for::<$first>() {
+            let __p: *mut $first = $raw[0] as *mut $first;
+            // SAFETY: vtable match → the underlying storage is a
+            // `$first`. The reborrow to `&mut $first` is scoped to
+            // this branch (which returns immediately), so the
+            // enclosing `&mut dyn $trait_name` is not accessed again
+            // while the reborrow is live.
+            let __ref: &mut $first = unsafe { &mut *__p };
+            return $crate::__paste! {
+                __ref.[<__spec_ $method>]($($arg),*)
+            };
+        }
+        $crate::r#trait!(@dispatch_mut_chain
+            $inner, $trait_name, $this, $method, ($($arg),*), [$($rest),*], $raw)
+    }};
+
+    (@dispatch_mut_chain $inner:ident, $trait_name:ident, $this:tt, $method:ident,
+        ($($arg:expr),*), [], $raw:ident
+    ) => {
         $crate::__paste! { $inner::[<__spec_ $method>] }(&mut *$this $(, $arg)*)
     };
 
     // ── @dispatch_mut_void: &mut self, void ────────────────────────────────
 
-    (@dispatch_mut_void $inner:ident, $this:tt, $method:ident, ($($arg:expr),*),
-        [$first:ty $(, $rest:ty)*]
+    (@dispatch_mut_void $inner:ident, $trait_name:ident, $this:tt, $method:ident,
+        ($($arg:expr),*), [$($hot:ty),+]
     ) => {{
-        if $crate::__paste! { $inner::[<__try_ $method _as_ $first:snake>] }(&mut *$this $(, $arg)*).is_some() {
-            return;
-        }
-        $crate::r#trait!(@dispatch_mut_void $inner, $this, $method, ($($arg),*), [$($rest),*])
+        let __raw: [usize; 2] =
+            <dyn $trait_name>::__devirt_raw_parts(&*$this);
+        $crate::r#trait!(@dispatch_mut_void_chain
+            $inner, $trait_name, $this, $method, ($($arg),*), [$($hot),+], __raw)
     }};
 
-    (@dispatch_mut_void $inner:ident, $this:tt, $method:ident, ($($arg:expr),*), []) => {
+    (@dispatch_mut_void_chain $inner:ident, $trait_name:ident, $this:tt, $method:ident,
+        ($($arg:expr),*), [$first:ty $(, $rest:ty)*], $raw:ident
+    ) => {{
+        if $raw[1] == <dyn $trait_name>::__devirt_vtable_for::<$first>() {
+            let __p: *mut $first = $raw[0] as *mut $first;
+            // SAFETY: see @dispatch_mut_chain above.
+            let __ref: &mut $first = unsafe { &mut *__p };
+            $crate::__paste! {
+                __ref.[<__spec_ $method>]($($arg),*);
+            }
+            return;
+        }
+        $crate::r#trait!(@dispatch_mut_void_chain
+            $inner, $trait_name, $this, $method, ($($arg),*), [$($rest),*], $raw)
+    }};
+
+    (@dispatch_mut_void_chain $inner:ident, $trait_name:ident, $this:tt, $method:ident,
+        ($($arg:expr),*), [], $raw:ident
+    ) => {
         $crate::__paste! { $inner::[<__spec_ $method>] }(&mut *$this $(, $arg)*)
     };
 }
 
 /// Implements a devirtualized trait for a concrete type.
 ///
-/// Use `[hot]` when this type is listed as a hot type in the `r#trait!`
-/// declaration. Hot types override the witness methods so dispatch skips
-/// the vtable. Cold types fall back to vtable-based dispatch.
+/// The optional `[hot]` marker is accepted for backward compatibility and
+/// as documentation that this type appears in the trait's hot list. It
+/// does not change the expansion — hot-path specialization is driven
+/// entirely by the trait's hot-type list via vtable-pointer comparison
+/// in the generated dispatch shim.
 ///
 /// # Syntax
 ///
 /// ```ignore
-/// // Hot type (must be listed in the trait's `[...]` hot list):
+/// // Hot type (listed in the trait's `[...]` hot list):
 /// devirt::r#impl!(MyTrait for HotType [hot] {
 ///     fn method(&self) -> ReturnType { ... }
 /// });
@@ -380,7 +555,7 @@ macro_rules! r#trait {
 /// used in the `r#trait!` hot list.
 #[macro_export]
 macro_rules! r#impl {
-    // Cold impl
+    // Cold impl — or equivalently, any impl without the `[hot]` marker.
     ($trait_name:ident for $type:ty {
         $(fn $method:ident( $($args:tt)* ) $(-> $ret:ty)? { $($body:tt)* })*
     }) => {
@@ -394,92 +569,143 @@ macro_rules! r#impl {
         }
     };
 
-    // Hot impl
+    // Hot impl — the `[hot]` marker is purely documentary; the expansion
+    // is identical to the cold impl above because hot-path specialization
+    // is driven by the trait's hot list, not by per-impl overrides.
     ($trait_name:ident for $type:ty [hot] {
-        $($methods:tt)*
+        $(fn $method:ident( $($args:tt)* ) $(-> $ret:ty)? { $($body:tt)* })*
     }) => {
-        $crate::__paste! {
-            impl [<__ $trait_name Impl>] for $type {
-                $crate::r#impl!{@hot_spec $($methods)*}
-                $crate::r#impl!{@hot_witness $type, $($methods)*}
-            }
-        }
+        $crate::r#impl!($trait_name for $type {
+            $(fn $method( $($args)* ) $(-> $ret)? { $($body)* })*
+        });
     };
+}
 
-    // ── @hot_spec ───────────────────────────────────────────────────────────
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Unit tests for the unsafe primitives — verify the fat pointer layout
+// and vtable identity assumptions that underpin dispatch soundness.
+// Run by `cargo test -p devirt` and also exercised by `cargo miri test`.
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-    (@hot_spec
-        fn $method:ident( $($args:tt)* ) $(-> $ret:ty)? { $($body:tt)* }
-        $($rest:tt)*
-    ) => {
-        $crate::__paste! {
-            #[inline]
-            fn [<__spec_ $method>]( $($args)* ) $(-> $ret)? { $($body)* }
+#[cfg(test)]
+mod primitives {
+    extern crate alloc;
+    use alloc::boxed::Box;
+
+    struct Hot {
+        val: u64,
+    }
+    struct Also {
+        val: u64,
+    }
+    struct Cold {
+        val: u64,
+    }
+
+    crate::r#trait! {
+        pub Probe [Hot, Also] {
+            fn get(&self) -> u64;
+            fn set(&mut self, v: u64);
         }
-        $crate::r#impl!{@hot_spec $($rest)*}
-    };
+    }
 
-    (@hot_spec) => {};
+    crate::r#impl!(Probe for Hot [hot] {
+        fn get(&self) -> u64 { self.val }
+        fn set(&mut self, v: u64) { self.val = v; }
+    });
 
-    // ── @hot_witness ────────────────────────────────────────────────────────
+    crate::r#impl!(Probe for Also [hot] {
+        fn get(&self) -> u64 { self.val.wrapping_add(1) }
+        fn set(&mut self, v: u64) { self.val = v.wrapping_add(1); }
+    });
 
-    // &self with return type
-    (@hot_witness $type:ty,
-        fn $method:ident(&self $(, $arg:ident : $argty:ty)*) -> $ret:ty { $($body:tt)* }
-        $($rest:tt)*
-    ) => {
-        $crate::__paste! {
-            #[inline(always)]
-            fn [<__try_ $method _as_ $type:snake>](&self $(, $arg: $argty)*) -> Option<$ret> {
-                Some(self.[<__spec_ $method>]($($arg),*))
-            }
-        }
-        $crate::r#impl!{@hot_witness $type, $($rest)*}
-    };
+    crate::r#impl!(Probe for Cold {
+        fn get(&self) -> u64 { self.val.wrapping_sub(1) }
+        fn set(&mut self, v: u64) { self.val = v.wrapping_sub(1); }
+    });
 
-    // &self without return type
-    (@hot_witness $type:ty,
-        fn $method:ident(&self $(, $arg:ident : $argty:ty)*) { $($body:tt)* }
-        $($rest:tt)*
-    ) => {
-        $crate::__paste! {
-            #[inline(always)]
-            fn [<__try_ $method _as_ $type:snake>](&self $(, $arg: $argty)*) -> Option<()> {
-                self.[<__spec_ $method>]($($arg),*);
-                Some(())
-            }
-        }
-        $crate::r#impl!{@hot_witness $type, $($rest)*}
-    };
+    /// The fat pointer's first half is the data pointer, second is vtable.
+    /// If this ever fails, every unsafe operation in the dispatch shim
+    /// becomes unsound and the `size_of` compile-time assertion is
+    /// insufficient to detect it.
+    #[test]
+    fn fat_pointer_is_data_then_vtable() {
+        let hot = Hot { val: 42 };
+        let dyn_ref: &dyn Probe = &hot;
+        let raw = <dyn Probe>::__devirt_raw_parts(dyn_ref);
+        let expected_data = core::ptr::from_ref::<Hot>(&hot) as usize;
+        assert_eq!(raw[0], expected_data, "data half mismatch");
+        assert_ne!(raw[1], 0, "vtable half must be non-null");
+    }
 
-    // &mut self with return type
-    (@hot_witness $type:ty,
-        fn $method:ident(&mut self $(, $arg:ident : $argty:ty)*) -> $ret:ty { $($body:tt)* }
-        $($rest:tt)*
-    ) => {
-        $crate::__paste! {
-            #[inline(always)]
-            fn [<__try_ $method _as_ $type:snake>](&mut self $(, $arg: $argty)*) -> Option<$ret> {
-                Some(self.[<__spec_ $method>]($($arg),*))
-            }
-        }
-        $crate::r#impl!{@hot_witness $type, $($rest)*}
-    };
+    /// `vtable_for::<T>()` must be deterministic: repeated calls return
+    /// the same address within a single run.
+    #[test]
+    fn vtable_for_is_deterministic() {
+        let a = <dyn Probe>::__devirt_vtable_for::<Hot>();
+        let b = <dyn Probe>::__devirt_vtable_for::<Hot>();
+        assert_eq!(a, b);
+    }
 
-    // &mut self without return type
-    (@hot_witness $type:ty,
-        fn $method:ident(&mut self $(, $arg:ident : $argty:ty)*) { $($body:tt)* }
-        $($rest:tt)*
-    ) => {
-        $crate::__paste! {
-            #[inline(always)]
-            fn [<__try_ $method _as_ $type:snake>](&mut self $(, $arg: $argty)*) -> Option<()> {
-                self.[<__spec_ $method>]($($arg),*);
-                Some(())
-            }
-        }
-        $crate::r#impl!{@hot_witness $type, $($rest)*}
-    };
+    /// Different concrete types must produce different vtables (so the
+    /// comparison dispatch cannot ever match the wrong type).
+    #[test]
+    fn distinct_types_have_distinct_vtables() {
+        let h = <dyn Probe>::__devirt_vtable_for::<Hot>();
+        let a = <dyn Probe>::__devirt_vtable_for::<Also>();
+        let c = <dyn Probe>::__devirt_vtable_for::<Cold>();
+        assert_ne!(h, a);
+        assert_ne!(h, c);
+        assert_ne!(a, c);
+    }
 
-    (@hot_witness $type:ty,) => {};
+    /// Vtables are deduplicated by the compiler: two distinct values of
+    /// the same type produce the same vtable pointer.
+    #[test]
+    fn same_type_deduplicated_vtable() {
+        let a = Hot { val: 1 };
+        let b = Hot { val: 2 };
+        let a_dyn: &dyn Probe = &a;
+        let b_dyn: &dyn Probe = &b;
+        let av = <dyn Probe>::__devirt_raw_parts(a_dyn)[1];
+        let bv = <dyn Probe>::__devirt_raw_parts(b_dyn)[1];
+        assert_eq!(av, bv);
+        assert_eq!(av, <dyn Probe>::__devirt_vtable_for::<Hot>());
+    }
+
+    /// End-to-end: dispatch through `&dyn Probe` for hot, hot-second,
+    /// and cold types returns the same result as a direct call. This is
+    /// the main soundness property.
+    #[test]
+    fn dispatch_equivalence_ref() {
+        let h = Hot { val: 10 };
+        let a = Also { val: 10 };
+        let c = Cold { val: 10 };
+        assert_eq!((&h as &dyn Probe).get(), 10);
+        assert_eq!((&a as &dyn Probe).get(), 11);
+        assert_eq!((&c as &dyn Probe).get(), 9);
+    }
+
+    /// Same end-to-end property for `&mut self` — this is the path most
+    /// likely to break under Stacked Borrows.
+    #[test]
+    fn dispatch_equivalence_mut() {
+        let mut h = Hot { val: 0 };
+        let mut a = Also { val: 0 };
+        let mut c = Cold { val: 0 };
+        (&mut h as &mut dyn Probe).set(7);
+        (&mut a as &mut dyn Probe).set(7);
+        (&mut c as &mut dyn Probe).set(7);
+        assert_eq!(h.val, 7);
+        assert_eq!(a.val, 8);
+        assert_eq!(c.val, 6);
+    }
+
+    /// Heap-boxed dispatch also works (important because it exercises a
+    /// different aliasing pattern than stack references).
+    #[test]
+    fn dispatch_through_box() {
+        let boxed: Box<dyn Probe> = Box::new(Hot { val: 5 });
+        assert_eq!(boxed.get(), 5);
+    }
 }

@@ -1,20 +1,34 @@
 # devirt
 
-Transparent devirtualization for Rust trait objects. 29% faster dispatch on
-hot-dominated collections vs plain `dyn Trait`, with `#![no_std]` support.
+Transparent devirtualization for Rust trait objects via **vtable-pointer
+comparison**, with `#![no_std]` support. Eliminates the indirect call entirely
+on hot paths — measured 1.88–1.92× speedup on shuffled hot-dominant collections
+(see `benches/dispatch.rs::bench_shuffled_mixed`).
 
 ## How it works
 
-`devirt` uses **witness-method dispatch**: hot types (the ones you expect to
-dominate your collections) get a thin inlined check that routes directly to the
-concrete type's method, bypassing the vtable entirely. Cold types fall back to
-normal vtable dispatch. Callers use plain `dyn Trait` — no wrappers, no
-special calls, zero API change at call sites.
+`devirt` uses **vtable-pointer-comparison dispatch**. At each call site through
+`&dyn Trait`, the generated dispatch shim extracts the vtable pointer from the
+fat pointer and compares it against compile-time-known vtable addresses for
+each hot type. On a match, the data pointer is reinterpreted as
+`&HotType` and the method is called directly (fully inlined under LTO) — no
+vtable lookup, no indirect call. On a miss, the shim falls through to a
+single vtable call via the hidden `__spec_*` method.
+
+Earlier versions of this crate used a different "witness-method" pattern that
+still paid one indirect call on the hot path, so despite the inlining it
+offered no measurable speedup over plain `dyn Trait` on shuffled workloads.
+The vtable-comparison approach fully eliminates the indirect call. Callers
+use plain `dyn Trait` — no wrappers, no special calls, zero API change at
+call sites.
 
 ## LTO required
 
-This crate relies on cross-function inlining to eliminate dispatch overhead.
-**Without LTO, performance will be worse than plain `dyn Trait`.**
+This crate relies on cross-function inlining **and** cross-CGU vtable
+deduplication. **Without LTO, the vtable-comparison may always miss
+(because the trait and the hot type's impl live in different codegen units
+and their vtables are not deduplicated), silently degrading to plain
+`dyn Trait` dispatch.**
 
 Add this to your `Cargo.toml`:
 
@@ -38,7 +52,7 @@ devirt::r#trait! {
     }
 }
 
-// 2. Hot type — witness override, no vtable
+// 2. Hot type — vtable-cmp match, direct inlined call under LTO
 devirt::r#impl!(Shape for Circle [hot] {
     fn area(&self) -> f64 {
         core::f64::consts::PI * self.radius * self.radius
@@ -82,14 +96,18 @@ objects). Common scenarios:
 
 ## Performance characteristics
 
-| Path               | Cost                                                                                                        |
-| ------------------ | ----------------------------------------------------------------------------------------------------------- |
-| Hot type dispatch  | Zero overhead vs direct call (with LTO)                                                                     |
-| Cold type dispatch | Linear in the number of hot types (one inlined `None`-returning branch per hot type before vtable fallback) |
+| Path               | Cost                                                                                                                       |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| Hot type dispatch  | Single `cmp` against a RIP-relative vtable address + direct, inlined method call under LTO. **No indirect call.**          |
+| Cold type dispatch | Linear in the number of hot types (one inlined `cmp` against each hot vtable before a single `__spec_*` vtable fallback).  |
 
 ## Benchmarks
 
-Comprehensive benchmarks comparing three dispatch strategies:
+Comprehensive benchmarks comparing three dispatch strategies. **Note:** the
+numbers below were collected against the older witness-method implementation
+and are retained pending a full re-run against vtable-pointer comparison —
+see `benches/dispatch.rs::bench_shuffled_mixed` for the new headline
+workload from the RFC.
 
 ### Single Method Call (Hot Type)
 

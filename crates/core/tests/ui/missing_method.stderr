@@ -14,4 +14,4 @@ error[E0046]: not all trait items implemented, missing: `__spec_second`
 12 | | });
    | |__^ missing `__spec_second` in implementation
    |
-   = note: this error originates in the macro `devirt::impl` (in Nightly builds, run with -Z macro-backtrace for more info)
+   = note: this error originates in the macro `$crate::impl` which comes from the expansion of the macro `devirt::impl` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -122,10 +122,10 @@ fn total_area(shapes: &[Box<dyn Shape>]) -> f64 {
 
 fn main() {
     let mut shapes: Vec<Box<dyn Shape>> = vec![
-        Box::new(Circle { radius: 5.0 }),                // → witness
-        Box::new(Rect { w: 3.0, h: 4.0 }),              // → witness
-        Box::new(Triangle { a: 3.0, b: 4.0, c: 5.0 }), // → vtable
-        Box::new(Hexagon { side: 2.0 }),                 // → vtable
+        Box::new(Circle { radius: 5.0 }),                // → vtable-cmp hot
+        Box::new(Rect { w: 3.0, h: 4.0 }),              // → vtable-cmp hot
+        Box::new(Triangle { a: 3.0, b: 4.0, c: 5.0 }), // → vtable fallback
+        Box::new(Hexagon { side: 2.0 }),                 // → vtable fallback
     ];
 
     println!("=== dyn Shape — devirtualization is invisible ===");

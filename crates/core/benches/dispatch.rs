@@ -511,5 +511,82 @@ fn bench_mixed_vec(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_area, bench_scale, bench_mixed_vec);
+// ─────────────────────────────────────────────────────────────────────
+// Shuffled 80/20 hot/cold benchmark — the headline workload from the
+// vtable-comparison RFC. Unlike `mixed_vec`, this group places hot and
+// cold shapes in a deterministically-shuffled order so the CPU's
+// indirect branch target buffer cannot learn the call pattern, making
+// plain vtable dispatch pay full indirect-call latency on every call.
+// ─────────────────────────────────────────────────────────────────────
+
+fn make_shuffled_devirt(n: usize) -> Vec<Box<dyn Shape>> {
+    let mut v: Vec<Box<dyn Shape>> = Vec::with_capacity(n);
+    // 80% hot (alternating Circle/Rect), 20% cold (alternating
+    // Triangle/Hexagon). Interleaved in a fixed permutation so the
+    // branch predictor cannot memorize the sequence.
+    for i in 0..n {
+        let bucket = (i * 7 + 3) % 10;
+        v.push(match bucket {
+            0..=3 => Box::new(Circle { radius: 5.0 }),
+            4..=7 => Box::new(Rect { w: 3.0, h: 4.0 }),
+            8 => Box::new(Triangle { a: 3.0, b: 4.0, c: 5.0 }),
+            _ => Box::new(Hexagon { side: 1.5 }),
+        });
+    }
+    v
+}
+
+fn make_shuffled_plain(n: usize) -> Vec<Box<dyn PlainShape>> {
+    let mut v: Vec<Box<dyn PlainShape>> = Vec::with_capacity(n);
+    for i in 0..n {
+        let bucket = (i * 7 + 3) % 10;
+        v.push(match bucket {
+            0..=3 => Box::new(Circle { radius: 5.0 }),
+            4..=7 => Box::new(Rect { w: 3.0, h: 4.0 }),
+            8 => Box::new(Triangle { a: 3.0, b: 4.0, c: 5.0 }),
+            _ => Box::new(Hexagon { side: 1.5 }),
+        });
+    }
+    v
+}
+
+fn bench_shuffled_mixed(c: &mut Criterion) {
+    let mut group = c.benchmark_group("shuffled_mixed");
+
+    for &n in &[10_usize, 100, 1000] {
+        let label_devirt = format!("devirt_n{n}");
+        group.bench_function(&label_devirt, |b| {
+            let shapes = make_shuffled_devirt(n);
+            b.iter(|| {
+                let mut total = 0.0_f64;
+                for s in &shapes {
+                    total += black_box(s.as_ref()).area();
+                }
+                total
+            });
+        });
+
+        let label_plain = format!("plain_n{n}");
+        group.bench_function(&label_plain, |b| {
+            let shapes = make_shuffled_plain(n);
+            b.iter(|| {
+                let mut total = 0.0_f64;
+                for s in &shapes {
+                    total += black_box(s.as_ref()).area();
+                }
+                total
+            });
+        });
+    }
+
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_area,
+    bench_scale,
+    bench_mixed_vec,
+    bench_shuffled_mixed
+);
 criterion_main!(benches);
