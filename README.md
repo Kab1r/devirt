@@ -1,20 +1,29 @@
 # devirt
 
-Transparent devirtualization for Rust trait objects. 29% faster dispatch on
-hot-dominated collections vs plain `dyn Trait`, with `#![no_std]` support.
+Transparent devirtualization for Rust trait objects via **vtable-pointer
+comparison**, with `#![no_std]` support. Eliminates the indirect call
+entirely on hot paths — up to **3.4× faster** than plain `dyn Trait` on
+shuffled hot-dominant collections (see `benches/dispatch.rs::bench_shuffled_mixed`).
 
 ## How it works
 
-`devirt` uses **witness-method dispatch**: hot types (the ones you expect to
-dominate your collections) get a thin inlined check that routes directly to the
-concrete type's method, bypassing the vtable entirely. Cold types fall back to
-normal vtable dispatch. Callers use plain `dyn Trait` — no wrappers, no
-special calls, zero API change at call sites.
+`devirt` uses **vtable-pointer-comparison dispatch**. At each call site
+through `&dyn Trait`, the generated dispatch shim extracts the vtable
+pointer from the fat pointer and compares it against compile-time-known
+vtable addresses for each hot type. On a match, the data pointer is
+reinterpreted as `&HotType` and the method is called directly (fully
+inlined under LTO) — no vtable lookup, no indirect call. On a miss, the
+shim falls through to a single vtable call via the hidden `__spec_*`
+method. Callers use plain `dyn Trait` — no wrappers, no special calls,
+zero API change at call sites.
 
 ## LTO required
 
-This crate relies on cross-function inlining to eliminate dispatch overhead.
-**Without LTO, performance will be worse than plain `dyn Trait`.**
+This crate relies on cross-function inlining **and** cross-CGU vtable
+deduplication. **Without LTO, the vtable-comparison may always miss
+(because the trait and the hot type's impl live in different codegen units
+and their vtables are not deduplicated), silently degrading to plain
+`dyn Trait` dispatch.**
 
 Add this to your `Cargo.toml`:
 
@@ -38,7 +47,7 @@ devirt::r#trait! {
     }
 }
 
-// 2. Hot type — witness override, no vtable
+// 2. Hot type — vtable-cmp match, direct inlined call under LTO
 devirt::r#impl!(Shape for Circle [hot] {
     fn area(&self) -> f64 {
         core::f64::consts::PI * self.radius * self.radius
@@ -75,72 +84,74 @@ objects). Common scenarios:
 
 ## When not to use
 
-- **Evenly split collections** — no type dominates, so the witness checks add
-  overhead without enough hot-path wins to compensate
+- **Evenly split collections** — no type dominates, so the vtable
+  comparisons add overhead without enough hot-path wins to compensate
 - **Cold-dominated collections** — most objects are cold types; the extra
-  branches before vtable fallback make things slower
+  comparisons before vtable fallback make things slower
 
 ## Performance characteristics
 
-| Path               | Cost                                                                                                        |
-| ------------------ | ----------------------------------------------------------------------------------------------------------- |
-| Hot type dispatch  | Zero overhead vs direct call (with LTO)                                                                     |
-| Cold type dispatch | Linear in the number of hot types (one inlined `None`-returning branch per hot type before vtable fallback) |
+| Path               | Cost                                                                                                                                                                                                        |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Hot type dispatch  | Single `cmp` against a RIP-relative vtable address + direct, inlined method call under LTO. **No indirect call.**                                                                                           |
+| Cold type dispatch | Adds ~0.3 ns per hot type over plain vtable dispatch — one `lea + cmp + jne` per hot type before the vtable fallback. Keep the hot list to ≤3 types to keep this overhead below a single cache-miss cycle.  |
 
 ## Benchmarks
 
-Comprehensive benchmarks comparing three dispatch strategies:
+### Single dispatch
 
-### Single Method Call (Hot Type)
+| Strategy     | Hot type | Cold type |
+| ------------ | -------- | --------- |
+| **devirt**   | 1.02 ns  | 2.52 ns   |
+| Plain vtable | 1.84 ns  | 2.26 ns   |
+| Enum match   | 1.80 ns  | 2.18 ns   |
 
-| Strategy     | With LTO | Without LTO    |
-| ------------ | -------- | -------------- |
-| **devirt**   | 1.64 ns  | 2.05 ns        |
-| Plain vtable | 2.05 ns  | 1.69 ns        |
-| Enum-based   | 2.13 ns  | **1.47 ns** ⭐ |
+Hot-type dispatch eliminates the indirect call entirely — the 1.02 ns is
+an inlined `PI * r * r`. Cold types pay one `cmp + branch` per hot type
+before the vtable fallback, adding ~0.3 ns over plain vtable.
 
-**Finding:** With LTO, devirt achieves near-perfect zero overhead on hot types. Without LTO, explicit enum-based dispatch is fastest, but devirt remains competitive. (Note: Enum-based is unusually faster without LTO due to simpler code layout and better CPU cache locality for this tight loop.)
+### Mixed collection (4 items, 50/50 hot/cold)
 
-### Single Method Call (Cold Type)
+| Strategy     | Time     |
+| ------------ | -------- |
+| **devirt**   | 9.43 ns  |
+| Plain vtable | 10.85 ns |
+| Enum match   | 9.78 ns  |
 
-| Strategy     | With LTO | Without LTO |
-| ------------ | -------- | ----------- |
-| **devirt**   | 3.33 ns  | 3.28 ns     |
-| Plain vtable | 5.17 ns  | 3.28 ns     |
-| Enum-based   | 2.79 ns  | 2.71 ns ⭐  |
+### Hot-dominant collection (10 items, 80% hot)
 
-**Finding:** Devirt's cold-type penalty (witness checks before vtable fallback) is small. Plain vtable is slower with LTO. Enum-based is fastest in both cases.
+| Strategy     | Time    |
+| ------------ | ------- |
+| **devirt**   | 17.5 ns |
+| Plain vtable | 24.3 ns |
+| Enum match   | 19.6 ns |
 
-### Mixed Collection (50/50 Hot/Cold, 4 items)
+### Shuffled collection (80% hot, 20% cold, randomized order)
 
-| Strategy     | With LTO       | Without LTO    |
-| ------------ | -------------- | -------------- |
-| **devirt**   | 12.03 ns       | 12.22 ns       |
-| Plain vtable | 12.18 ns       | 19.56 ns ⚠️    |
-| Enum-based   | **9.83 ns** ⭐ | **8.10 ns** ⭐ |
+This is the scenario where devirt shines — the CPU's indirect branch
+target buffer cannot learn the call pattern, so plain vtable dispatch
+pays the full branch misprediction cost on every call.
 
-**Finding:** Devirt ties with plain vtable when LTO is enabled. Without LTO, plain vtable degrades dramatically (2.4x slower), while devirt remains stable. Enum-based is fastest in realistic mixed workloads due to better CPU cache locality and branch prediction.
+| Collection size | devirt  | Plain vtable | Speedup |
+| --------------- | ------- | ------------ | ------- |
+| n=10            | 18.2 ns | 22.9 ns      | 1.3×    |
+| n=100           | 166 ns  | 467 ns       | 2.8×    |
+| n=1000          | 1.54 µs | 5.31 µs      | 3.4×    |
 
-### Key Takeaways
+Notes:
 
-1. **With LTO (recommended):** Devirt achieves its design goal—hot-type dispatch is as fast as a direct call (1.64 ns), with minimal cold-type penalty.
-
-2. **Without LTO:**
-   - Hot-type dispatch has ~35% overhead (2.05 ns vs 1.69 ns plain)
-   - Mixed workloads remain competitive (devirt 12.22 ns vs plain 19.56 ns)
-   - Explicit enum dispatch is fastest but requires API changes
-
-3. **Trade-off:** Devirt offers performance close to enum-based dispatch while maintaining transparent `dyn Trait` API. The 35% overhead without LTO is acceptable for the flexibility gained.
-
-### Benchmark Methodology Notes
-
-The criterion benchmarks measure the entire compiled program (including criterion itself), so they're affected by how the overall binary is optimized. When the dispatch code is isolated in a standalone binary and measured with hyperfine:
-
-- **With LTO:** 935.1 ms ± 11.5 ms
-- **Without LTO:** 936.2 ms ± 14.3 ms
-- **Difference:** 1.00x (within noise)
-
-The generated assembly is identical; differences in criterion results stem from binary layout effects under different optimization strategies.
+- **LTO is required.** Without it, the trait and the hot type's impl may
+  end up in different codegen units and their vtables may not be
+  deduplicated, so the comparison always misses and dispatch silently
+  degrades to plain vtable.
+- **Keep the hot list to ≤3 types.** Each hot type adds one `cmp + branch`
+  to the cold path, and more than three becomes a net loss on
+  cold-dominated workloads.
+- **The shuffled benchmark is the most realistic workload.** Fixed-order
+  small collections let the CPU's branch target buffer learn the call
+  pattern after a few iterations, which masks most of the difference
+  between devirt and plain vtable; real programs rarely dispatch over a
+  hot repeating sequence.
 
 Run benchmarks yourself:
 

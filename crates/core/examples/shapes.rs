@@ -1,6 +1,6 @@
 //! Demonstrates [`devirt`] with a `Shape` trait across hot and cold types.
 //!
-//! `Circle` and `Rect` are listed as hot types and get witness-method dispatch.
+//! `Circle` and `Rect` are listed as hot types and get vtable-pointer-comparison dispatch.
 //! `Triangle` and `Hexagon` fall back to normal vtable dispatch.
 //! All four are used identically through `dyn Shape`.
 //!
@@ -31,7 +31,9 @@ devirt::r#trait! {
     }
 }
 
-// 2. Implement — normal-looking impl blocks; [hot] overrides witness methods
+// 2. Implement — normal-looking impl blocks; [hot] marks a type as listed
+//    in the trait's hot list above (documentary — hot-path dispatch is
+//    driven entirely by the trait declaration, not by per-impl overrides)
 devirt::r#impl!(Shape for Circle [hot] {
     fn area(&self) -> f64 {
         core::f64::consts::PI * self.radius * self.radius
@@ -122,10 +124,10 @@ fn total_area(shapes: &[Box<dyn Shape>]) -> f64 {
 
 fn main() {
     let mut shapes: Vec<Box<dyn Shape>> = vec![
-        Box::new(Circle { radius: 5.0 }),                // → witness
-        Box::new(Rect { w: 3.0, h: 4.0 }),              // → witness
-        Box::new(Triangle { a: 3.0, b: 4.0, c: 5.0 }), // → vtable
-        Box::new(Hexagon { side: 2.0 }),                 // → vtable
+        Box::new(Circle { radius: 5.0 }),                // → vtable-cmp hot
+        Box::new(Rect { w: 3.0, h: 4.0 }),              // → vtable-cmp hot
+        Box::new(Triangle { a: 3.0, b: 4.0, c: 5.0 }), // → vtable fallback
+        Box::new(Hexagon { side: 2.0 }),                 // → vtable fallback
     ];
 
     println!("=== dyn Shape — devirtualization is invisible ===");

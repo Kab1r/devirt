@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 readme = "../../README.md"
-description = "Transparent devirtualization for Rust trait objects via witness-method dispatch"
+description = "Transparent devirtualization for Rust trait objects via vtable-pointer comparison"
 keywords = ["devirtualization", "vtable", "no-std", "dispatch", "performance"]
 categories = ["no-std", "rust-patterns"]
 

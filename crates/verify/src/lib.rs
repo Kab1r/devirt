@@ -1,13 +1,28 @@
 //! Abstract dispatch model proving correctness for all N.
 //!
 //! The macro's dispatch chain has one fundamental pattern:
-//! for each hot type in order, call witness; if Some, return it.
-//! After all witnesses, call fallback. The four dispatch arms
-//! are all instances of this pattern.
+//! for each hot type in order, check a predicate; if it matches,
+//! return the corresponding value. After all hot types, call
+//! fallback. The four dispatch arms are all instances of this
+//! pattern.
 //!
 //! `dispatch_spec` is defined directly recursive to mirror the
 //! macro's unrolled chain, making inductive proofs natural.
 //! `first_match` is a separate spec used by Property A.
+//!
+//! # Relation to vtable-pointer comparison
+//!
+//! The new dispatch mechanism compares the runtime vtable pointer
+//! against compile-time-known vtable addresses for each hot type,
+//! rather than calling witness methods that return `Option`. The
+//! abstract model is agnostic to the comparison mechanism: whether
+//! the "witness" at index `i` is `Some(v)` depends only on
+//! whether the runtime vtable equals `hot_vts[i]`. The refinement
+//! lemma `vtable_refines_witness` at the bottom of this file
+//! proves that `vtable_dispatch_spec` (which models the new
+//! implementation directly) is equivalent to `dispatch_spec`
+//! (the existing abstract spec), so Properties A, B, and C
+//! transfer to the new implementation without reproof.
 
 use vstd::prelude::*;
 
@@ -174,6 +189,121 @@ pub proof fn hot_dispatch_correct(
             (hot_idx - 1) as nat,
             val,
         );
+    }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// VTABLE-COMPARISON REFINEMENT
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//
+// Model of the new dispatch implementation: instead of a sequence
+// of `Option<u64>` witnesses, we have a runtime vtable pointer
+// and a sequence of hot vtables with corresponding values. A
+// match at index `i` fires when `vt == hot_vts[i]`, returning
+// `values[i]`. No match falls through to `fallback`.
+//
+// The refinement lemma `vtable_refines_witness` proves this is
+// equivalent to `dispatch_spec` on the "projected" witnesses
+// sequence, so the existing Property A/B/C proofs apply without
+// modification.
+
+/// Direct recursive model of the vtable-comparison dispatch.
+pub open spec fn vtable_dispatch_spec(
+    vt: u64,
+    hot_vts: Seq<u64>,
+    values: Seq<u64>,
+    fallback: u64,
+) -> u64
+    decreases hot_vts.len(),
+{
+    if hot_vts.len() == 0 {
+        fallback
+    } else if hot_vts[0] == vt {
+        values[0]
+    } else {
+        vtable_dispatch_spec(
+            vt,
+            hot_vts.subrange(1, hot_vts.len() as int),
+            values.subrange(1, values.len() as int),
+            fallback,
+        )
+    }
+}
+
+/// Project a vtable lookup into the witness-sequence encoding:
+/// for each hot-type index `i`, the "witness" is `Some(values[i])`
+/// iff the runtime `vt` matches `hot_vts[i]`, else `None`.
+pub open spec fn project_witnesses(
+    vt: u64,
+    hot_vts: Seq<u64>,
+    values: Seq<u64>,
+) -> Seq<Option<u64>>
+    decreases hot_vts.len(),
+{
+    if hot_vts.len() == 0 {
+        Seq::empty()
+    } else {
+        let head: Option<u64> = if hot_vts[0] == vt {
+            Some(values[0])
+        } else {
+            None
+        };
+        seq![head].add(project_witnesses(
+            vt,
+            hot_vts.subrange(1, hot_vts.len() as int),
+            values.subrange(1, values.len() as int),
+        ))
+    }
+}
+
+/// Refinement lemma: the vtable-comparison dispatch is equivalent
+/// to the abstract witness-sequence dispatch under the projection
+/// `project_witnesses`. This lets the existing Property A/B/C
+/// proofs (`first_match_is_earliest`, `fallback_always_fires`,
+/// `hot_dispatch_correct`) apply to the new implementation.
+pub proof fn vtable_refines_witness(
+    vt: u64,
+    hot_vts: Seq<u64>,
+    values: Seq<u64>,
+    fallback: u64,
+)
+    requires
+        hot_vts.len() == values.len(),
+    ensures
+        vtable_dispatch_spec(vt, hot_vts, values, fallback)
+            == dispatch_spec(
+                project_witnesses(vt, hot_vts, values),
+                fallback,
+            ),
+    decreases hot_vts.len(),
+{
+    if hot_vts.len() == 0 {
+        // Both sides evaluate to `fallback` on an empty sequence.
+        assert(project_witnesses(vt, hot_vts, values) =~= Seq::empty());
+    } else {
+        let tail_vts = hot_vts.subrange(1, hot_vts.len() as int);
+        let tail_vals = values.subrange(1, values.len() as int);
+
+        // Inductive hypothesis on the tail.
+        vtable_refines_witness(vt, tail_vts, tail_vals, fallback);
+
+        let witnesses = project_witnesses(vt, hot_vts, values);
+
+        // Unfold the projection one step and observe that its tail
+        // matches the projection of the tail sequences.
+        assert(witnesses.len() > 0);
+        assert(witnesses.subrange(1, witnesses.len() as int)
+            =~= project_witnesses(vt, tail_vts, tail_vals));
+
+        if hot_vts[0] == vt {
+            // Head witness is `Some(values[0])`, so the abstract
+            // dispatch returns it immediately. Direct by unfolding.
+            assert(witnesses[0] == Some(values[0]));
+        } else {
+            // Head witness is `None`, so abstract dispatch recurses
+            // on the tail, which matches the IH.
+            assert(witnesses[0].is_none());
+        }
     }
 }
 

@@ -52,6 +52,24 @@ jobs:
       - run: cargo install cargo-fuzz
       - run: cargo +nightly fuzz build dispatch
 
+  miri:
+    name: Miri
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      # Miri ships as a nightly component; pin the toolchain explicitly
+      # so we can request the `miri` component alongside nightly rustc.
+      - uses: dtolnay/rust-toolchain@5b842231ba77f5c045dba54ac5560fed2db780e2 # nightly
+        with:
+          components: miri
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      # `cargo miri test -p devirt --lib` exercises the fat-pointer
+      # transmute, the vtable identity primitives, and the &mut
+      # dispatch path under Stacked/Tree Borrows. The lib tests are
+      # the only ones Miri needs to check — the trybuild UI tests
+      # don't exercise any unsafe code and Kani has its own harness.
+      - run: cargo +nightly miri test -p devirt --lib
+
   kani:
     name: Kani
     runs-on: ubuntu-latest
