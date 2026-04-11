@@ -638,8 +638,20 @@ mod primitives {
         assert_ne!(raw[1], 0, "vtable half must be non-null");
     }
 
+    // Vtable identity is a link-time / LTO-time property: the
+    // compiler deduplicates vtables for a given `(Type, Trait)` pair
+    // within a single compilation unit, and the linker deduplicates
+    // across CGUs under LTO. Miri, however, is a *semantic*
+    // interpreter — it may allocate a fresh vtable on every `*const
+    // T → *const dyn Trait` coercion because the Rust spec does not
+    // guarantee vtable uniqueness. Under Miri the dispatch
+    // equivalence tests below still pass (the hot-path comparison
+    // just always misses and the fallback returns the correct
+    // result), but the identity comparisons themselves are skipped.
+
     /// `vtable_for::<T>()` must be deterministic: repeated calls return
     /// the same address within a single run.
+    #[cfg_attr(miri, ignore = "Miri does not guarantee vtable uniqueness")]
     #[test]
     fn vtable_for_is_deterministic() {
         let a = <dyn Probe>::__devirt_vtable_for::<Hot>();
@@ -649,6 +661,7 @@ mod primitives {
 
     /// Different concrete types must produce different vtables (so the
     /// comparison dispatch cannot ever match the wrong type).
+    #[cfg_attr(miri, ignore = "Miri does not guarantee vtable uniqueness")]
     #[test]
     fn distinct_types_have_distinct_vtables() {
         let h = <dyn Probe>::__devirt_vtable_for::<Hot>();
@@ -661,6 +674,7 @@ mod primitives {
 
     /// Vtables are deduplicated by the compiler: two distinct values of
     /// the same type produce the same vtable pointer.
+    #[cfg_attr(miri, ignore = "Miri does not guarantee vtable uniqueness")]
     #[test]
     fn same_type_deduplicated_vtable() {
         let a = Hot { val: 1 };

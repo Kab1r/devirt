@@ -7,6 +7,11 @@
 //! across the generated `__TraitNImpl` hidden traits.
 #![cfg(kani)]
 #![allow(missing_docs)]
+// The `mod vt` section below uses `unsafe { &*(raw[0] as *const Hot) }`
+// to round-trip the data half of a fat pointer. The crate-wide lint is
+// `deny(unsafe_code)` and this file's harnesses are the only unsafe
+// use site — allow it here only.
+#![allow(unsafe_code)]
 
 // ── N=1: base case — one witness check, then fallback ────────────────────
 
