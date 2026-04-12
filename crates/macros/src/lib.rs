@@ -190,6 +190,18 @@ fn expand_impl(attr: &TokenStream, impl_item: &syn::ItemImpl) -> TokenStream {
         .into();
     }
 
+    // Reject qualified paths (e.g., super::MyTrait, crate::MyTrait) —
+    // __devirt_define! requires a plain ident, not a path.
+    if trait_path.leading_colon.is_some() || trait_path.segments.len() > 1 {
+        return syn::Error::new_spanned(
+            trait_path,
+            "#[devirt] requires a plain trait name, not a qualified path \
+             (e.g., `impl MyTrait for T`, not `impl super::MyTrait for T`)",
+        )
+        .to_compile_error()
+        .into();
+    }
+
     let unsafety = &impl_item.unsafety;
     let trait_name = &trait_path.segments.last().expect("trait path is empty").ident;
     let ty = &impl_item.self_ty;

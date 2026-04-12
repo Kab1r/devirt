@@ -2,6 +2,7 @@
 name = "devirt"
 version.workspace = true
 edition.workspace = true
+rust-version = "1.85"
 license.workspace = true
 repository.workspace = true
 readme = "../../README.md"
@@ -11,7 +12,7 @@ categories = ["no-std", "rust-patterns"]
 
 [dependencies]
 paste.workspace = true
-devirt-macros = { path = "../macros", optional = true }
+devirt-macros = { workspace = true, optional = true }
 
 [features]
 default = ["macros"]
