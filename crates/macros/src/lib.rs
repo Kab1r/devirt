@@ -328,7 +328,15 @@ fn rewrite_sig_with_named_args(
                 _ => {
                     // Validation already rejects this case, but
                     // generate a name defensively.
-                    arg_names.push(format_ident!("__devirt_arg{idx}"));
+                    let generated = format_ident!("__devirt_arg{idx}");
+                    *pat_type.pat = syn::Pat::Ident(syn::PatIdent {
+                        attrs: vec![],
+                        by_ref: None,
+                        mutability: None,
+                        ident: generated.clone(),
+                        subpat: None,
+                    });
+                    arg_names.push(generated);
                 }
             }
         }
