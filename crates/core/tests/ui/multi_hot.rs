@@ -3,21 +3,21 @@ struct B;
 struct C;
 
 devirt::__devirt_define! {
-    @trait
+    @trait []
     pub MultiHot [A, B, C] {
         fn id(&self) -> u8;
     }
 }
 
-devirt::__devirt_define! { @impl MultiHot for A {
+devirt::__devirt_define! { @impl [] MultiHot for A {
     fn id(&self) -> u8 { 1 }
 }}
 
-devirt::__devirt_define! { @impl MultiHot for B {
+devirt::__devirt_define! { @impl [] MultiHot for B {
     fn id(&self) -> u8 { 2 }
 }}
 
-devirt::__devirt_define! { @impl MultiHot for C {
+devirt::__devirt_define! { @impl [] MultiHot for C {
     fn id(&self) -> u8 { 3 }
 }}
 

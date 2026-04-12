@@ -3,7 +3,7 @@ struct Inner {
 }
 
 devirt::__devirt_define! {
-    @trait
+    @trait []
     /// A public trait with documentation.
     pub DocTrait [Inner] {
         /// Returns the inner value.
@@ -11,7 +11,7 @@ devirt::__devirt_define! {
     }
 }
 
-devirt::__devirt_define! { @impl DocTrait for Inner {
+devirt::__devirt_define! { @impl [] DocTrait for Inner {
     fn get(&self) -> i32 { self.val }
 }}
 

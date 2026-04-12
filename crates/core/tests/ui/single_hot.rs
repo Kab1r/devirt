@@ -3,13 +3,13 @@ struct Foo {
 }
 
 devirt::__devirt_define! {
-    @trait
+    @trait []
     pub SingleHot [Foo] {
         fn get(&self) -> f64;
     }
 }
 
-devirt::__devirt_define! { @impl SingleHot for Foo {
+devirt::__devirt_define! { @impl [] SingleHot for Foo {
     fn get(&self) -> f64 { self.val }
 }}
 

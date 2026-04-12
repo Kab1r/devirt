@@ -21,6 +21,10 @@ macros = ["dep:devirt-macros"]
 criterion.workspace = true
 trybuild.workspace = true
 
+[[example]]
+name = "shapes"
+required-features = ["macros"]
+
 [[test]]
 name = "ui_attr"
 required-features = ["macros"]
@@ -28,6 +32,7 @@ required-features = ["macros"]
 [[bench]]
 name = "dispatch"
 harness = false
+required-features = ["macros"]
 
 [lints]
 workspace = true

@@ -119,6 +119,7 @@ fn expand_trait(attr: TokenStream, trait_item: &syn::ItemTrait) -> TokenStream {
             .into_iter()
             .collect();
 
+    let unsafety = &trait_item.unsafety;
     let vis = &trait_item.vis;
     let name = &trait_item.ident;
 
@@ -142,7 +143,7 @@ fn expand_trait(attr: TokenStream, trait_item: &syn::ItemTrait) -> TokenStream {
 
     quote! {
         ::devirt::__devirt_define! {
-            @trait
+            @trait [#unsafety]
             #outer_attrs
             #vis #name [#(#hot_types),*] {
                 #methods_tokens
@@ -189,6 +190,7 @@ fn expand_impl(attr: &TokenStream, impl_item: &syn::ItemImpl) -> TokenStream {
         .into();
     }
 
+    let unsafety = &impl_item.unsafety;
     let trait_name = &trait_path.segments.last().expect("trait path is empty").ident;
     let ty = &impl_item.self_ty;
 
@@ -205,7 +207,7 @@ fn expand_impl(attr: &TokenStream, impl_item: &syn::ItemImpl) -> TokenStream {
 
     quote! {
         ::devirt::__devirt_define! {
-            @impl
+            @impl [#unsafety]
             #trait_name for #ty {
                 #method_bodies
             }

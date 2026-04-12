@@ -6,6 +6,8 @@ fn ui_attr() {
     t.pass("tests/ui_attr/attr_single_hot.rs");
     t.pass("tests/ui_attr/attr_multi_hot.rs");
     t.pass("tests/ui_attr/attr_all_arms.rs");
+    t.pass("tests/ui_attr/attr_unsafe_trait.rs");
+    t.pass("tests/ui_attr/attr_method_attrs.rs");
     t.compile_fail("tests/ui_attr/attr_missing_args.rs");
     t.compile_fail("tests/ui_attr/attr_args_on_impl.rs");
     t.compile_fail("tests/ui_attr/attr_on_struct.rs");

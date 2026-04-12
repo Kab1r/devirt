@@ -1,7 +1,7 @@
 struct Foo;
 
 devirt::__devirt_define! {
-    @trait
+    @trait []
     pub ArgsOnImpl [Foo] {
         fn get(&self) -> i32;
     }

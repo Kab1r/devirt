@@ -124,7 +124,7 @@ pub use paste::paste as __paste;
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __devirt_define {
-    (@trait
+    (@trait [$($unsafety:tt)*]
         $(#[$meta:meta])*
         $vis:vis $trait_name:ident [$($hot:ty),+ $(,)?] {
             $($methods:tt)*
@@ -132,7 +132,7 @@ macro_rules! __devirt_define {
     ) => {
         $crate::__paste! {
             #[doc(hidden)]
-            $vis trait [<__ $trait_name Impl>] {
+            $vis $($unsafety)* trait [<__ $trait_name Impl>] {
                 $crate::__devirt_define!{@spec_decl $($methods)*}
             }
 
@@ -227,9 +227,9 @@ macro_rules! __devirt_define {
             // (...)` or call `<T as __${trait_name}Impl>::__spec_$method
             // (&t, ...)` via UFCS.
             $(#[$meta])*
-            $vis trait $trait_name: [<__ $trait_name Impl>] {}
+            $vis $($unsafety)* trait $trait_name: [<__ $trait_name Impl>] {}
 
-            impl<__DevirtT: [<__ $trait_name Impl>] + ?Sized> $trait_name for __DevirtT {}
+            $($unsafety)* impl<__DevirtT: [<__ $trait_name Impl>] + ?Sized> $trait_name for __DevirtT {}
         }
     };
 
@@ -273,6 +273,7 @@ macro_rules! __devirt_define {
         $($rest:tt)*
     ) => {
         $crate::__paste! {
+            $(#[$attr])*
             #[inline]
             #[doc(hidden)]
             pub fn $method(&self $(, $arg: $argty)*) -> $ret {
@@ -292,6 +293,7 @@ macro_rules! __devirt_define {
         $($rest:tt)*
     ) => {
         $crate::__paste! {
+            $(#[$attr])*
             #[inline]
             #[doc(hidden)]
             pub fn $method(&self $(, $arg: $argty)*) {
@@ -311,6 +313,7 @@ macro_rules! __devirt_define {
         $($rest:tt)*
     ) => {
         $crate::__paste! {
+            $(#[$attr])*
             #[inline]
             #[doc(hidden)]
             pub fn $method(&mut self $(, $arg: $argty)*) -> $ret {
@@ -330,6 +333,7 @@ macro_rules! __devirt_define {
         $($rest:tt)*
     ) => {
         $crate::__paste! {
+            $(#[$attr])*
             #[inline]
             #[doc(hidden)]
             pub fn $method(&mut self $(, $arg: $argty)*) {
@@ -510,12 +514,16 @@ macro_rules! __devirt_define {
 
     // ── @impl: implement a devirtualized trait for a concrete type ──────────
 
-    (@impl $trait_name:ident for $type:ty {
-        $(fn $method:ident( $($args:tt)* ) $(-> $ret:ty)? { $($body:tt)* })*
+    (@impl [$($unsafety:tt)*] $trait_name:ident for $type:ty {
+        $(
+            $(#[$method_attr:meta])*
+            fn $method:ident( $($args:tt)* ) $(-> $ret:ty)? { $($body:tt)* }
+        )*
     }) => {
         $crate::__paste! {
-            impl [<__ $trait_name Impl>] for $type {
+            $($unsafety)* impl [<__ $trait_name Impl>] for $type {
                 $(
+                    $(#[$method_attr])*
                     #[inline]
                     fn [<__spec_ $method>]( $($args)* ) $(-> $ret)? { $($body)* }
                 )*
@@ -535,7 +543,7 @@ macro_rules! __devirt_define {
 /// ```ignore
 /// // Define a trait with hot types
 /// devirt::devirt! {
-///     pub MyTrait [HotType1, HotType2] {
+///     pub trait MyTrait [HotType1, HotType2] {
 ///         fn method(&self) -> ReturnType;
 ///         fn mut_method(&mut self, arg: ArgType);
 ///     }
@@ -560,7 +568,23 @@ macro_rules! devirt {
         }
     ) => {
         $crate::__devirt_define! {
-            @trait
+            @trait []
+            $(#[$meta])*
+            $vis $name [$($hot),+] {
+                $($methods)*
+            }
+        }
+    };
+
+    // Unsafe trait definition
+    (
+        $(#[$meta:meta])*
+        $vis:vis unsafe trait $name:ident [$($hot:ty),+ $(,)?] {
+            $($methods:tt)*
+        }
+    ) => {
+        $crate::__devirt_define! {
+            @trait [unsafe]
             $(#[$meta])*
             $vis $name [$($hot),+] {
                 $($methods)*
@@ -575,7 +599,21 @@ macro_rules! devirt {
         }
     ) => {
         $crate::__devirt_define! {
-            @impl
+            @impl []
+            $trait_name for $type {
+                $($methods)*
+            }
+        }
+    };
+
+    // Unsafe impl block
+    (
+        unsafe impl $trait_name:ident for $type:ty {
+            $($methods:tt)*
+        }
+    ) => {
+        $crate::__devirt_define! {
+            @impl [unsafe]
             $trait_name for $type {
                 $($methods)*
             }
@@ -609,24 +647,24 @@ mod primitives {
     }
 
     crate::__devirt_define! {
-        @trait
+        @trait []
         pub Probe [Hot, Also] {
             fn get(&self) -> u64;
             fn set(&mut self, v: u64);
         }
     }
 
-    crate::__devirt_define! { @impl Probe for Hot {
+    crate::__devirt_define! { @impl [] Probe for Hot {
         fn get(&self) -> u64 { self.val }
         fn set(&mut self, v: u64) { self.val = v; }
     }}
 
-    crate::__devirt_define! { @impl Probe for Also {
+    crate::__devirt_define! { @impl [] Probe for Also {
         fn get(&self) -> u64 { self.val.wrapping_add(1) }
         fn set(&mut self, v: u64) { self.val = v.wrapping_add(1); }
     }}
 
-    crate::__devirt_define! { @impl Probe for Cold {
+    crate::__devirt_define! { @impl [] Probe for Cold {
         fn get(&self) -> u64 { self.val.wrapping_sub(1) }
         fn set(&mut self, v: u64) { self.val = v.wrapping_sub(1); }
     }}

@@ -7,7 +7,7 @@ struct ColdType {
 }
 
 devirt::__devirt_define! {
-    @trait
+    @trait []
     pub AllArms [Hot] {
         fn ref_nonvoid(&self, x: f64) -> f64;
         fn ref_void(&self, x: f64);
@@ -16,14 +16,14 @@ devirt::__devirt_define! {
     }
 }
 
-devirt::__devirt_define! { @impl AllArms for Hot {
+devirt::__devirt_define! { @impl [] AllArms for Hot {
     fn ref_nonvoid(&self, x: f64) -> f64 { self.val + x }
     fn ref_void(&self, _x: f64) { }
     fn mut_nonvoid(&mut self, x: f64) -> f64 { self.val += x; self.val }
     fn mut_void(&mut self, x: f64) { self.val = x; }
 }}
 
-devirt::__devirt_define! { @impl AllArms for ColdType {
+devirt::__devirt_define! { @impl [] AllArms for ColdType {
     fn ref_nonvoid(&self, x: f64) -> f64 { self.val + x }
     fn ref_void(&self, _x: f64) { }
     fn mut_nonvoid(&mut self, x: f64) -> f64 { self.val += x; self.val }
