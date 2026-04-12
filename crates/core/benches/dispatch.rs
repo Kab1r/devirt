@@ -586,11 +586,79 @@ fn bench_shuffled_mixed(c: &mut Criterion) {
     group.finish();
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// dyn Trait + Send benchmark.  Exercises the same shuffled 80/20
+// workload as `bench_shuffled_mixed` but through `Box<dyn Shape +
+// Send>` to verify that the delegating inherent impls are inlined
+// and devirt still wins over plain vtable dispatch.
+// ─────────────────────────────────────────────────────────────────────
+
+fn make_shuffled_devirt_send(n: usize) -> Vec<Box<dyn Shape + Send>> {
+    let mut v: Vec<Box<dyn Shape + Send>> = Vec::with_capacity(n);
+    for i in 0..n {
+        let bucket = (i * 7 + 3) % 10;
+        v.push(match bucket {
+            0..=3 => Box::new(Circle { radius: 5.0 }),
+            4..=7 => Box::new(Rect { w: 3.0, h: 4.0 }),
+            8 => Box::new(Triangle { a: 3.0, b: 4.0, c: 5.0 }),
+            _ => Box::new(Hexagon { side: 1.5 }),
+        });
+    }
+    v
+}
+
+fn make_shuffled_plain_send(n: usize) -> Vec<Box<dyn PlainShape + Send>> {
+    let mut v: Vec<Box<dyn PlainShape + Send>> = Vec::with_capacity(n);
+    for i in 0..n {
+        let bucket = (i * 7 + 3) % 10;
+        v.push(match bucket {
+            0..=3 => Box::new(Circle { radius: 5.0 }),
+            4..=7 => Box::new(Rect { w: 3.0, h: 4.0 }),
+            8 => Box::new(Triangle { a: 3.0, b: 4.0, c: 5.0 }),
+            _ => Box::new(Hexagon { side: 1.5 }),
+        });
+    }
+    v
+}
+
+fn bench_shuffled_send(c: &mut Criterion) {
+    let mut group = c.benchmark_group("shuffled_send");
+
+    for &n in &[10_usize, 100, 1000] {
+        let label_devirt = format!("devirt_n{n}");
+        group.bench_function(&label_devirt, |b| {
+            let shapes = make_shuffled_devirt_send(n);
+            b.iter(|| {
+                let mut total = 0.0_f64;
+                for s in &shapes {
+                    total += black_box(s.as_ref()).area();
+                }
+                total
+            });
+        });
+
+        let label_plain = format!("plain_n{n}");
+        group.bench_function(&label_plain, |b| {
+            let shapes = make_shuffled_plain_send(n);
+            b.iter(|| {
+                let mut total = 0.0_f64;
+                for s in &shapes {
+                    total += black_box(s.as_ref()).area();
+                }
+                total
+            });
+        });
+    }
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_area,
     bench_scale,
     bench_mixed_vec,
-    bench_shuffled_mixed
+    bench_shuffled_mixed,
+    bench_shuffled_send
 );
 criterion_main!(benches);

@@ -102,6 +102,26 @@ devirt::devirt! {
 
 Both APIs produce identical expanded code.
 
+### `dyn Trait + Send` / `Sync`
+
+The proc-macro attribute automatically emits dispatch shims for
+`dyn Trait + Send`, `dyn Trait + Sync`, and `dyn Trait + Send + Sync`.
+This means `Box<dyn Shape + Send>` and `&(dyn Shape + Send + Sync)`
+benefit from devirtualization without any extra annotation:
+
+```rust
+fn total_area_send(shapes: &[Box<dyn Shape + Send>]) -> f64 {
+    shapes.iter().map(|s| s.area()).sum()
+}
+```
+
+Auto traits do not change the vtable layout, so the delegation is
+zero-cost — LLVM eliminates it entirely with `#[inline(always)]`.
+
+> **Note:** The declarative macro (`default-features = false`) does not
+> emit auto-trait inherent impls. Use the proc-macro attribute for
+> `dyn Trait + Send` support.
+
 ## When to use
 
 Best when a small number of hot types dominate the population (80%+ of trait

@@ -191,6 +191,20 @@ fn emit_trait_expansion(
         })
         .collect();
 
+    // Delegating methods for auto-trait inherent impls (Send, Sync,
+    // Send + Sync).  Each method coerces `self` to the base `dyn Trait`
+    // and calls the dispatch method.
+    let delegating_methods: Vec<_> = trait_item
+        .items
+        .iter()
+        .filter_map(|item| {
+            let syn::TraitItem::Fn(m) = item else {
+                return None;
+            };
+            Some(generate_delegating_method(m, name))
+        })
+        .collect();
+
     // Inner trait supertraits: `__FooImpl: Debug + Clone`
     let inner_supers = if supertraits.is_empty() {
         quote! {}
@@ -257,6 +271,21 @@ fn emit_trait_expansion(
             #(#dispatch_methods)*
         }
 
+        // (4a) dyn Trait + Send — delegate to base dispatch.
+        impl<'__devirt> dyn #name + ::core::marker::Send + '__devirt {
+            #(#delegating_methods)*
+        }
+
+        // (4b) dyn Trait + Sync — delegate to base dispatch.
+        impl<'__devirt> dyn #name + ::core::marker::Sync + '__devirt {
+            #(#delegating_methods)*
+        }
+
+        // (4c) dyn Trait + Send + Sync — delegate to base dispatch.
+        impl<'__devirt> dyn #name + ::core::marker::Send + ::core::marker::Sync + '__devirt {
+            #(#delegating_methods)*
+        }
+
         // (5) Public marker trait.
         #(#outer_attrs)*
         #vis #unsafety trait #name: #public_supers {}
@@ -266,6 +295,45 @@ fn emit_trait_expansion(
             for __DevirtT {}
     }
     .into()
+}
+
+// ── Shared helpers ──────────────────────────────────────────────────────────
+
+/// Clone a method signature, replacing wildcard `_` patterns with
+/// generated names so arguments can be forwarded.  Returns the
+/// rewritten signature and a list of argument identifiers (excluding
+/// `self`).
+fn rewrite_sig_with_named_args(
+    sig: &syn::Signature,
+) -> (syn::Signature, Vec<syn::Ident>) {
+    let mut sig = sig.clone();
+    let mut arg_names = Vec::new();
+    for (idx, arg) in sig.inputs.iter_mut().enumerate() {
+        if let syn::FnArg::Typed(pat_type) = arg {
+            match &*pat_type.pat {
+                syn::Pat::Ident(pat_ident) => {
+                    arg_names.push(pat_ident.ident.clone());
+                }
+                syn::Pat::Wild(_) => {
+                    let generated = format_ident!("__arg{idx}");
+                    *pat_type.pat = syn::Pat::Ident(syn::PatIdent {
+                        attrs: vec![],
+                        by_ref: None,
+                        mutability: None,
+                        ident: generated.clone(),
+                        subpat: None,
+                    });
+                    arg_names.push(generated);
+                }
+                _ => {
+                    // Validation already rejects this case, but
+                    // generate a name defensively.
+                    arg_names.push(format_ident!("__arg{idx}"));
+                }
+            }
+        }
+    }
+    (sig, arg_names)
 }
 
 // ── Dispatch method generation ──────────────────────────────────────────────
@@ -295,35 +363,7 @@ fn generate_dispatch_method(
     let is_mut = receiver.mutability.is_some();
     let is_unsafe = sig.unsafety.is_some();
 
-    // Build the dispatch signature, replacing wildcard `_` patterns
-    // with generated names so we can forward arguments.
-    let mut dispatch_sig = sig.clone();
-    let mut arg_names: Vec<syn::Ident> = Vec::new();
-    for (idx, arg) in dispatch_sig.inputs.iter_mut().enumerate() {
-        if let syn::FnArg::Typed(pat_type) = arg {
-            match &*pat_type.pat {
-                syn::Pat::Ident(pat_ident) => {
-                    arg_names.push(pat_ident.ident.clone());
-                }
-                syn::Pat::Wild(_) => {
-                    let generated = format_ident!("__arg{idx}");
-                    *pat_type.pat = syn::Pat::Ident(syn::PatIdent {
-                        attrs: vec![],
-                        by_ref: None,
-                        mutability: None,
-                        ident: generated.clone(),
-                        subpat: None,
-                    });
-                    arg_names.push(generated);
-                }
-                _ => {
-                    // Validation already rejects this case, but
-                    // generate a name defensively.
-                    arg_names.push(format_ident!("__arg{idx}"));
-                }
-            }
-        }
-    }
+    let (dispatch_sig, arg_names) = rewrite_sig_with_named_args(sig);
 
     let raw_parts = if is_mut {
         quote! { let __raw = <dyn #trait_name>::__devirt_raw_parts(&*self); }
@@ -395,6 +435,68 @@ fn gen_hot_checks(
             }
         })
         .collect()
+}
+
+// ── Delegating method generation (auto-trait impls) ─────────────────────────
+
+/// Generate a delegating shim that coerces `&(dyn Trait + Send)` (or
+/// `Sync`, `Send + Sync`) to `&dyn Trait` and calls the base dispatch
+/// method.  Auto traits do not change the vtable layout, so the
+/// coercion is zero-cost and LLVM eliminates the delegation entirely
+/// with `#[inline(always)]`.
+fn generate_delegating_method(
+    method: &syn::TraitItemFn,
+    trait_name: &syn::Ident,
+) -> proc_macro2::TokenStream {
+    let sig = &method.sig;
+    let method_name = &sig.ident;
+    let attrs = &method.attrs;
+
+    let receiver = sig
+        .inputs
+        .first()
+        .and_then(|a| {
+            if let syn::FnArg::Receiver(r) = a {
+                Some(r)
+            } else {
+                None
+            }
+        })
+        .expect("validated: method has receiver");
+
+    let is_mut = receiver.mutability.is_some();
+    let is_unsafe = sig.unsafety.is_some();
+    let (dispatch_sig, arg_names) = rewrite_sig_with_named_args(sig);
+
+    // Coerce to the base `dyn Trait` and call the dispatch method.
+    let coerce_and_call = if is_mut {
+        quote! {
+            let __devirt_base: &mut (dyn #trait_name + '__devirt) = self;
+            __devirt_base.#method_name(#(#arg_names),*)
+        }
+    } else {
+        quote! {
+            let __devirt_base: &(dyn #trait_name + '__devirt) = self;
+            __devirt_base.#method_name(#(#arg_names),*)
+        }
+    };
+
+    // When the method is `unsafe fn`, the base dispatch method is also
+    // `unsafe fn`, so the call must be inside an `unsafe` block.
+    let delegation = if is_unsafe {
+        quote! { unsafe { #coerce_and_call } }
+    } else {
+        coerce_and_call
+    };
+
+    quote! {
+        #(#attrs)*
+        #[doc(hidden)]
+        #[inline(always)]
+        pub #dispatch_sig {
+            #delegation
+        }
+    }
 }
 
 // ── Impl expansion ──────────────────────────────────────────────────────────
