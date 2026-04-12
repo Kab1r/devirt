@@ -1,0 +1,21 @@
+[package]
+name = "devirt-macros"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "../../README.md"
+description = "Proc-macro attribute for devirt"
+keywords = ["devirtualization", "vtable", "no-std", "dispatch", "performance"]
+categories = ["no-std", "rust-patterns"]
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn.workspace = true
+quote.workspace = true
+proc-macro2.workspace = true
+
+[lints]
+workspace = true

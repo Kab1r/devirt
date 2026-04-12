@@ -24,7 +24,8 @@ mod n1 {
         val: u64,
     }
 
-    devirt::r#trait! {
+    devirt::__devirt_define! {
+        @trait
         pub Trait1 [Hot] {
             fn compute(&self, x: u64) -> u64;
             fn notify(&self, x: u64);
@@ -33,19 +34,19 @@ mod n1 {
         }
     }
 
-    devirt::r#impl!(Trait1 for Hot [hot] {
+    devirt::__devirt_define! { @impl Trait1 for Hot {
         fn compute(&self, x: u64) -> u64 { self.val.wrapping_add(x) }
         fn notify(&self, _x: u64) { }
         fn transform(&mut self, x: u64) -> u64 { self.val = self.val.wrapping_add(x); self.val }
         fn reset(&mut self, x: u64) { self.val = x; }
-    });
+    }}
 
-    devirt::r#impl!(Trait1 for Cold {
+    devirt::__devirt_define! { @impl Trait1 for Cold {
         fn compute(&self, x: u64) -> u64 { self.val.wrapping_sub(x) }
         fn notify(&self, _x: u64) { }
         fn transform(&mut self, x: u64) -> u64 { self.val = self.val.wrapping_sub(x); self.val }
         fn reset(&mut self, x: u64) { self.val = x.wrapping_add(1); }
-    });
+    }}
 
     #[kani::proof]
     fn t1_hot_compute_equiv() {
@@ -119,7 +120,8 @@ mod n2 {
         val: u64,
     }
 
-    devirt::r#trait! {
+    devirt::__devirt_define! {
+        @trait
         pub Trait2 [HotA, HotB] {
             fn compute(&self, x: u64) -> u64;
             fn notify(&self, x: u64);
@@ -128,26 +130,26 @@ mod n2 {
         }
     }
 
-    devirt::r#impl!(Trait2 for HotA [hot] {
+    devirt::__devirt_define! { @impl Trait2 for HotA {
         fn compute(&self, x: u64) -> u64 { self.val.wrapping_add(x) }
         fn notify(&self, _x: u64) { }
         fn transform(&mut self, x: u64) -> u64 { self.val = self.val.wrapping_add(x); self.val }
         fn reset(&mut self, x: u64) { self.val = x; }
-    });
+    }}
 
-    devirt::r#impl!(Trait2 for HotB [hot] {
+    devirt::__devirt_define! { @impl Trait2 for HotB {
         fn compute(&self, x: u64) -> u64 { self.val | x }
         fn notify(&self, _x: u64) { }
         fn transform(&mut self, x: u64) -> u64 { self.val |= x; self.val }
         fn reset(&mut self, x: u64) { self.val = x.wrapping_add(1); }
-    });
+    }}
 
-    devirt::r#impl!(Trait2 for Cold {
+    devirt::__devirt_define! { @impl Trait2 for Cold {
         fn compute(&self, x: u64) -> u64 { self.val.wrapping_sub(x) }
         fn notify(&self, _x: u64) { }
         fn transform(&mut self, x: u64) -> u64 { self.val = self.val.wrapping_sub(x); self.val }
         fn reset(&mut self, x: u64) { self.val = x.wrapping_add(2); }
-    });
+    }}
 
     #[kani::proof]
     fn t2_hot_a_compute_equiv() {
@@ -253,7 +255,8 @@ mod n3 {
         val: u64,
     }
 
-    devirt::r#trait! {
+    devirt::__devirt_define! {
+        @trait
         pub Trait3 [HotA, HotB, HotC] {
             fn compute(&self, x: u64) -> u64;
             fn notify(&self, x: u64);
@@ -262,33 +265,33 @@ mod n3 {
         }
     }
 
-    devirt::r#impl!(Trait3 for HotA [hot] {
+    devirt::__devirt_define! { @impl Trait3 for HotA {
         fn compute(&self, x: u64) -> u64 { self.val.wrapping_add(x) }
         fn notify(&self, _x: u64) { }
         fn transform(&mut self, x: u64) -> u64 { self.val = self.val.wrapping_add(x); self.val }
         fn reset(&mut self, x: u64) { self.val = x; }
-    });
+    }}
 
-    devirt::r#impl!(Trait3 for HotB [hot] {
+    devirt::__devirt_define! { @impl Trait3 for HotB {
         fn compute(&self, x: u64) -> u64 { self.val | x }
         fn notify(&self, _x: u64) { }
         fn transform(&mut self, x: u64) -> u64 { self.val |= x; self.val }
         fn reset(&mut self, x: u64) { self.val = x.wrapping_add(1); }
-    });
+    }}
 
-    devirt::r#impl!(Trait3 for HotC [hot] {
+    devirt::__devirt_define! { @impl Trait3 for HotC {
         fn compute(&self, x: u64) -> u64 { self.val ^ x }
         fn notify(&self, _x: u64) { }
         fn transform(&mut self, x: u64) -> u64 { self.val ^= x; self.val }
         fn reset(&mut self, x: u64) { self.val = x.wrapping_add(2); }
-    });
+    }}
 
-    devirt::r#impl!(Trait3 for Cold {
+    devirt::__devirt_define! { @impl Trait3 for Cold {
         fn compute(&self, x: u64) -> u64 { self.val.wrapping_sub(x) }
         fn notify(&self, _x: u64) { }
         fn transform(&mut self, x: u64) -> u64 { self.val = self.val.wrapping_sub(x); self.val }
         fn reset(&mut self, x: u64) { self.val = x.wrapping_add(3); }
-    });
+    }}
 
     #[kani::proof]
     fn t3_hot_a_compute_equiv() {
@@ -400,19 +403,20 @@ mod vt {
         val: u64,
     }
 
-    devirt::r#trait! {
+    devirt::__devirt_define! {
+        @trait
         pub TraitVt [Hot] {
             fn compute(&self, x: u64) -> u64;
         }
     }
 
-    devirt::r#impl!(TraitVt for Hot [hot] {
+    devirt::__devirt_define! { @impl TraitVt for Hot {
         fn compute(&self, x: u64) -> u64 { self.val.wrapping_add(x) }
-    });
+    }}
 
-    devirt::r#impl!(TraitVt for Cold {
+    devirt::__devirt_define! { @impl TraitVt for Cold {
         fn compute(&self, x: u64) -> u64 { self.val.wrapping_sub(x) }
-    });
+    }}
 
     /// The vtable extracted from a concrete `&dyn TraitVt` must match
     /// the vtable the macro computes via `__devirt_vtable_for::<T>()`.

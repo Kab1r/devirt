@@ -1,13 +1,14 @@
 struct Bar;
 
-devirt::r#trait! {
+devirt::__devirt_define! {
+    @trait
     pub WrongSig [Bar] {
         fn compute(&self, x: f64) -> f64;
     }
 }
 
-devirt::r#impl!(WrongSig for Bar [hot] {
+devirt::__devirt_define! { @impl WrongSig for Bar {
     fn compute(&self, x: u32) -> f64 { f64::from(x) }
-});
+}}
 
 fn main() {}

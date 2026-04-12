@@ -11,10 +11,19 @@ categories = ["no-std", "rust-patterns"]
 
 [dependencies]
 paste.workspace = true
+devirt-macros = { path = "../macros", optional = true }
+
+[features]
+default = ["macros"]
+macros = ["dep:devirt-macros"]
 
 [dev-dependencies]
 criterion.workspace = true
 trybuild.workspace = true
+
+[[test]]
+name = "ui_attr"
+required-features = ["macros"]
 
 [[bench]]
 name = "dispatch"

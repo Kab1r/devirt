@@ -13,7 +13,8 @@ struct Triangle { a: f64, b: f64, c: f64 }
 struct Hexagon { side: f64 }
 
 // 1. Define trait — list hot types in brackets
-devirt::r#trait! {
+devirt::__devirt_define! {
+    @trait
     /// Shapes with area, perimeter, and uniform scaling.
     pub Shape [Circle, Rect] {
         /// Returns the area of this shape.
@@ -31,10 +32,9 @@ devirt::r#trait! {
     }
 }
 
-// 2. Implement — normal-looking impl blocks; [hot] marks a type as listed
-//    in the trait's hot list above (documentary — hot-path dispatch is
-//    driven entirely by the trait declaration, not by per-impl overrides)
-devirt::r#impl!(Shape for Circle [hot] {
+// 2. Implement — hot-path specialization is driven entirely by the
+//    trait's hot-type list, not by per-impl overrides
+devirt::__devirt_define! { @impl Shape for Circle {
     fn area(&self) -> f64 {
         core::f64::consts::PI * self.radius * self.radius
     }
@@ -52,9 +52,9 @@ devirt::r#impl!(Shape for Circle [hot] {
         println!("circle with radius {:.2}", self.radius);
     }
     fn name(&self) -> &str { "circle" }
-});
+}}
 
-devirt::r#impl!(Shape for Rect [hot] {
+devirt::__devirt_define! { @impl Shape for Rect {
     fn area(&self) -> f64 { self.w * self.h }
     fn perimeter(&self) -> f64 { 2.0 * (self.w + self.h) }
     fn scale(&mut self, factor: f64) {
@@ -70,9 +70,9 @@ devirt::r#impl!(Shape for Rect [hot] {
         println!("rectangle {}×{:.2}", self.w, self.h);
     }
     fn name(&self) -> &str { "rectangle" }
-});
+}}
 
-devirt::r#impl!(Shape for Triangle {
+devirt::__devirt_define! { @impl Shape for Triangle {
     fn area(&self) -> f64 {
         let s = (self.a + self.b + self.c) / 2.0;
         (s * (s - self.a) * (s - self.b) * (s - self.c)).sqrt()
@@ -94,10 +94,10 @@ devirt::r#impl!(Shape for Triangle {
         println!("triangle with sides {:.2}, {:.2}, {:.2}", self.a, self.b, self.c);
     }
     fn name(&self) -> &str { "triangle" }
-});
+}}
 
 // Downstream type — not in the hot list, automatically uses vtable
-devirt::r#impl!(Shape for Hexagon {
+devirt::__devirt_define! { @impl Shape for Hexagon {
     fn area(&self) -> f64 { 1.5 * 3.0_f64.sqrt() * self.side * self.side }
     fn perimeter(&self) -> f64 { 6.0 * self.side }
     fn scale(&mut self, factor: f64) { self.side *= factor; }
@@ -109,7 +109,7 @@ devirt::r#impl!(Shape for Hexagon {
         println!("regular hexagon with side {:.2}", self.side);
     }
     fn name(&self) -> &str { "hexagon" }
-});
+}}
 
 // 3. Use — completely normal dyn Trait. Nothing special.
 

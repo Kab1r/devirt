@@ -25,7 +25,8 @@ struct Cold {
 
 // ── Devirtualized trait ─────────────────────────────────────────────────────
 
-devirt::r#trait! {
+devirt::__devirt_define! {
+    @trait
     pub Dispatch [HotA, HotB] {
         fn compute(&self, x: f64) -> f64;
         fn notify(&self, x: f64);
@@ -37,7 +38,7 @@ devirt::r#trait! {
     }
 }
 
-devirt::r#impl!(Dispatch for HotA [hot] {
+devirt::__devirt_define! { @impl Dispatch for HotA {
     fn compute(&self, x: f64) -> f64 { self.val + x }
     fn notify(&self, x: f64) { self.trace.set(self.val + x); }
     fn transform(&mut self, x: f64) -> f64 { self.val += x; self.val }
@@ -45,9 +46,9 @@ devirt::r#impl!(Dispatch for HotA [hot] {
     fn combine(&self, x: f64, y: f64) -> f64 { self.val + x + y }
     fn val(&self) -> f64 { self.val }
     fn trace_val(&self) -> f64 { self.trace.get() }
-});
+}}
 
-devirt::r#impl!(Dispatch for HotB [hot] {
+devirt::__devirt_define! { @impl Dispatch for HotB {
     fn compute(&self, x: f64) -> f64 { self.val * x }
     fn notify(&self, x: f64) { self.trace.set(self.val * x); }
     fn transform(&mut self, x: f64) -> f64 { self.val *= x; self.val }
@@ -55,9 +56,9 @@ devirt::r#impl!(Dispatch for HotB [hot] {
     fn combine(&self, x: f64, y: f64) -> f64 { self.val.mul_add(x, y) }
     fn val(&self) -> f64 { self.val }
     fn trace_val(&self) -> f64 { self.trace.get() }
-});
+}}
 
-devirt::r#impl!(Dispatch for Cold {
+devirt::__devirt_define! { @impl Dispatch for Cold {
     fn compute(&self, x: f64) -> f64 { self.val - x }
     fn notify(&self, x: f64) { self.trace.set(self.val - x); }
     fn transform(&mut self, x: f64) -> f64 { self.val -= x; self.val }
@@ -65,7 +66,7 @@ devirt::r#impl!(Dispatch for Cold {
     fn combine(&self, x: f64, y: f64) -> f64 { self.val - x - y }
     fn val(&self) -> f64 { self.val }
     fn trace_val(&self) -> f64 { self.trace.get() }
-});
+}}
 
 // ── Plain trait (baseline — normal vtable dispatch) ─────────────────────────
 

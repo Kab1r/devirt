@@ -6,29 +6,29 @@ struct ColdType {
     val: f64,
 }
 
-devirt::__devirt_define! {
-    @trait
-    pub AllArms [Hot] {
-        fn ref_nonvoid(&self, x: f64) -> f64;
-        fn ref_void(&self, x: f64);
-        fn mut_nonvoid(&mut self, x: f64) -> f64;
-        fn mut_void(&mut self, x: f64);
-    }
+#[devirt::devirt(Hot)]
+pub trait AllArms {
+    fn ref_nonvoid(&self, x: f64) -> f64;
+    fn ref_void(&self, x: f64);
+    fn mut_nonvoid(&mut self, x: f64) -> f64;
+    fn mut_void(&mut self, x: f64);
 }
 
-devirt::__devirt_define! { @impl AllArms for Hot {
+#[devirt::devirt]
+impl AllArms for Hot {
     fn ref_nonvoid(&self, x: f64) -> f64 { self.val + x }
     fn ref_void(&self, _x: f64) { }
     fn mut_nonvoid(&mut self, x: f64) -> f64 { self.val += x; self.val }
     fn mut_void(&mut self, x: f64) { self.val = x; }
-}}
+}
 
-devirt::__devirt_define! { @impl AllArms for ColdType {
+#[devirt::devirt]
+impl AllArms for ColdType {
     fn ref_nonvoid(&self, x: f64) -> f64 { self.val + x }
     fn ref_void(&self, _x: f64) { }
     fn mut_nonvoid(&mut self, x: f64) -> f64 { self.val += x; self.val }
     fn mut_void(&mut self, x: f64) { self.val = x; }
-}}
+}
 
 fn main() {
     let mut h: Box<dyn AllArms> = Box::new(Hot { val: 1.0 });

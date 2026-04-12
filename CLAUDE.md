@@ -8,11 +8,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Build
 cargo build
 
+# Build without proc-macro feature
+cargo build -p devirt --no-default-features
+
 # Run all tests (includes UI/compile-fail tests via trybuild)
 cargo test --workspace --exclude devirt-fuzz
 
-# Run only UI/compile-fail tests
+# Run declarative-macro-only tests
+cargo test -p devirt --no-default-features
+
+# Run only UI/compile-fail tests (declarative macro)
 cargo test --test ui -p devirt
+
+# Run only UI/compile-fail tests (proc-macro attribute)
+cargo test --test ui_attr -p devirt
 
 # Run Kani bounded model checker (requires cargo-kani)
 cargo kani --tests -p devirt
@@ -22,7 +31,7 @@ cargo kani --tests -p devirt
 # Stacked Borrows
 cargo +nightly miri test -p devirt --lib
 
-# Run benchmarks (LTO required for meaningful numbers)
+# Run benchmarks
 cargo bench
 
 # Run example
@@ -40,34 +49,46 @@ verus crates/verify/src/lib.rs --crate-type=lib
 
 ## Architecture
 
-This is a workspace with three crates:
+This is a workspace with four crates:
 
-- **`crates/core`** (`devirt`) — the main proc-macro-free macro library. Two public macros: `r#trait!` and `r#impl!`.
+- **`crates/core`** (`devirt`) — the main macro library. Exports `devirt!` (declarative) or `#[devirt]` (proc-macro attribute) depending on the `macros` feature (on by default). Both delegate to the internal `__devirt_define!` macro.
+- **`crates/macros`** (`devirt-macros`) — proc-macro crate providing the `#[devirt]` attribute. Optional dependency of `crates/core`, enabled by the `macros` feature.
 - **`crates/verify`** (`devirt-verify`) — Verus formal proofs of dispatch correctness.
 - **`fuzz`** — libfuzzer differential fuzzing comparing devirt dispatch vs. plain vtable.
 
 ### The Vtable-Pointer Comparison Pattern
 
-The core idea: the generated dispatch shim lives in an inherent `impl dyn Trait { ... }` block (not as a trait default method). For each call, it extracts the `[data, vtable]` halves of the fat pointer via `transmute::<&dyn Trait, [usize; 2]>` and compares the vtable half against the compile-time-known vtable for each hot type (obtained by coercing a dangling `*const HotType` to `*const dyn Trait`). On match, the data pointer is reinterpreted as `&HotType` and the concrete type's `__spec_*` method is called directly (fully inlined under LTO). On a full miss, the shim falls through to a single vtable call via the inner trait's `__spec_*` method.
+The core idea: the generated dispatch shim lives in an inherent `impl dyn Trait { ... }` block (not as a trait default method). For each call, it extracts the `[data, vtable]` halves of the fat pointer via `transmute::<&dyn Trait, [usize; 2]>` and compares the vtable half against the compile-time-known vtable for each hot type (obtained by coercing a dangling `*const HotType` to `*const dyn Trait`). On match, the data pointer is reinterpreted as `&HotType` and the concrete type's `__spec_*` method is called directly (fully inlined). On a full miss, the shim falls through to a single vtable call via the inner trait's `__spec_*` method.
 
 Why inherent methods on `dyn Trait` and not trait default methods: a default method body cannot cast `self as *const dyn Trait` because `Self: ?Sized` at that point. Inherent impls on `dyn Trait` have `Self = dyn Trait` directly, so the cast is just a ref-to-pointer conversion.
 
-### `r#trait!` Expansion
+### Macro Structure
+
+All dispatch expansion logic lives in `__devirt_define!` (`#[doc(hidden)]`, `#[macro_export]`, always available). It has two entry points:
+
+- `__devirt_define! { @trait ... }` — generates the trait, inner trait, dispatch shim, blanket impl
+- `__devirt_define! { @impl ... }` — generates `impl __TraitNameImpl for T { __spec_* ... }`
+
+The public APIs delegate to it:
+
+- **`#[devirt::devirt(Hot1, Hot2)]`** (proc-macro attribute, default) — parses the trait/impl and emits `::devirt::__devirt_define!` calls
+- **`devirt::devirt!`** (declarative macro, `default-features = false`) — thin dispatcher that forwards to `$crate::__devirt_define!`
+
+### `__devirt_define! { @trait ... }` Expansion
 
 For a trait `Foo` with hot types `[A, B]`:
-1. Generates hidden inner trait `__FooImpl` with `__spec_*` method declarations — user types provide the bodies via `r#impl!`.
+1. Generates hidden inner trait `__FooImpl` with `__spec_*` method declarations.
 2. Generates a compile-time assertion that `size_of::<*const dyn Foo>() == 2 * size_of::<usize>()`.
 3. Generates `impl<'a> dyn Foo + 'a { ... }` with two primitive helpers — `__devirt_raw_parts(&Self) -> [usize; 2]` and `__devirt_vtable_for::<T: __FooImpl + 'static>() -> usize` — plus inherent methods for each user-declared trait method whose body is the vtable-comparison dispatch shim.
 4. Generates public marker trait `Foo: __FooImpl` (no methods of its own).
 5. Blanket impl: `impl<T: __FooImpl + ?Sized> Foo for T {}`.
 
-### `r#impl!` Expansion
+### `__devirt_define! { @impl ... }` Expansion
 
-For `impl [hot] Foo for A { ... }` or `impl Foo for A { ... }`:
+For `impl Foo for A { ... }`:
 - Expands to `impl __FooImpl for A { fn __spec_method(...) { ... } }`.
-- The `[hot]` marker is accepted for backward compatibility but is purely documentary: hot-path specialization is driven entirely by the trait's hot-type list in `r#trait!`, not by per-impl overrides.
 
-### Dispatch Arms (inside `src/lib.rs`)
+### Dispatch Arms (inside `__devirt_define!`)
 
 Four arms handle the combinatorics of `&self`/`&mut self` × void/non-void. Each splits into an outer "set up `__raw`" arm and a recursive `*_chain` arm that walks the hot-type list:
 - `@dispatch_ref` / `@dispatch_ref_chain` — `&self`, returns value
@@ -80,7 +101,9 @@ Recursive expansion (rather than `$()+` repetition) avoids macro_rules metavar d
 ### Verification Layers
 
 - **Miri** (`cargo +nightly miri test -p devirt --lib`): runs the `#[cfg(test)] mod primitives` harnesses — fat pointer layout, vtable identity, and end-to-end `&self` / `&mut self` / `Box<dyn>` dispatch — under Stacked/Tree Borrows to catch aliasing violations in the unsafe transmute and `&mut` paths.
-- **UI tests** (`tests/ui/`): trybuild compile tests; `.stderr` files capture expected error output for compile-fail cases.
+- **UI tests** (`tests/ui/`): trybuild compile tests for `__devirt_define!` direct usage; `.stderr` files capture expected error output for compile-fail cases.
+- **UI attr tests** (`tests/ui_attr/`): trybuild compile tests for `#[devirt]` attribute; gated on `macros` feature via `required-features`.
+- **Equivalence test** (`tests/equivalence.rs`): verifies both APIs produce identical dispatch behavior.
 - **Kani** (`tests/kani.rs`): bounded model checker proofs for N=1,2,3 hot types, plus a `mod vt` section that directly verifies vtable-primitive soundness.
 - **Verus** (`crates/verify/`): full functional correctness proofs (Properties A, B, C) for the abstract `dispatch_spec`, plus a refinement lemma that proves `vtable_dispatch_spec` (a direct recursion over `(vt, hot_vts, values)` modelling the vtable-comparison shim) produces the same result as `dispatch_spec` on a projected `Seq<Option<u64>>`, so Properties A/B/C transfer to the vtable-comparison implementation without reproof.
 
@@ -88,5 +111,5 @@ Recursive expansion (rather than `$()+` repetition) avoids macro_rules metavar d
 
 - `#![no_std]` throughout `crates/core`
 - `paste` is a **regular** (not dev) dependency — it's needed at compile time during macro expansion
-- Benchmarks require LTO to be meaningful (profile.bench sets `lto = "thin"`)
+- `syn`, `quote`, `proc-macro2` are workspace dependencies used by `crates/macros`
 - Workspace lints are very strict: `deny` on suspicious/complexity/perf/style/cargo/pedantic/nursery clippy groups. `unsafe_code` is `deny` (not `forbid`) so `crates/core` can locally `#![allow(unsafe_code)]` — all other crates still disallow unsafe.

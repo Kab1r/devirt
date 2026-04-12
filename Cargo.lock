@@ -208,9 +208,10 @@ dependencies = [
 
 [[package]]
 name = "devirt"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "criterion",
+ "devirt-macros",
  "paste",
  "trybuild",
 ]
@@ -225,8 +226,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "devirt-macros"
+version = "0.2.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "devirt-verify"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "vstd",
 ]

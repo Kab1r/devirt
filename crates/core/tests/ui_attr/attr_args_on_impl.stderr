@@ -1,0 +1,67 @@
+error: hot types are specified on the trait definition, not the impl block
+  --> tests/ui_attr/attr_args_on_impl.rs:10:1
+   |
+10 | #[devirt::devirt(Foo)]
+   | ^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this error originates in the attribute macro `devirt::devirt` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `Foo: __ArgsOnImplImpl` is not satisfied
+ --> tests/ui_attr/attr_args_on_impl.rs:5:21
+  |
+5 |     pub ArgsOnImpl [Foo] {
+  |                     ^^^ unsatisfied trait bound
+  |
+help: the trait `__ArgsOnImplImpl` is not implemented for `Foo`
+ --> tests/ui_attr/attr_args_on_impl.rs:1:1
+  |
+1 | struct Foo;
+  | ^^^^^^^^^^
+help: this trait has no implementations, consider adding one
+ --> tests/ui_attr/attr_args_on_impl.rs:3:1
+  |
+3 | / devirt::__devirt_define! {
+4 | |     @trait
+5 | |     pub ArgsOnImpl [Foo] {
+6 | |         fn get(&self) -> i32;
+7 | |     }
+8 | | }
+  | |_^
+note: required by a bound in `<(dyn ArgsOnImpl + '__devirt)>::__devirt_vtable_for`
+ --> tests/ui_attr/attr_args_on_impl.rs:3:1
+  |
+3 | / devirt::__devirt_define! {
+4 | |     @trait
+5 | |     pub ArgsOnImpl [Foo] {
+6 | |         fn get(&self) -> i32;
+7 | |     }
+8 | | }
+  | | ^
+  | | |
+  | |_required by a bound in this associated function
+  |   required by this bound in `<dyn ArgsOnImpl>::__devirt_vtable_for`
+  = note: this error originates in the macro `devirt::__devirt_define` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `__spec_get` found for reference `&Foo` in the current scope
+ --> tests/ui_attr/attr_args_on_impl.rs:3:1
+  |
+3 | / devirt::__devirt_define! {
+4 | |     @trait
+5 | |     pub ArgsOnImpl [Foo] {
+6 | |         fn get(&self) -> i32;
+7 | |     }
+8 | | }
+  | |_^ method not found in `&Foo`
+  |
+  = help: items from traits can only be used if the trait is implemented and in scope
+note: `__ArgsOnImplImpl` defines an item `__spec_get`, perhaps you need to implement it
+ --> tests/ui_attr/attr_args_on_impl.rs:3:1
+  |
+3 | / devirt::__devirt_define! {
+4 | |     @trait
+5 | |     pub ArgsOnImpl [Foo] {
+6 | |         fn get(&self) -> i32;
+7 | |     }
+8 | | }
+  | |_^
+  = note: this error originates in the macro `$crate::__devirt_define` which comes from the expansion of the macro `devirt::__devirt_define` (in Nightly builds, run with -Z macro-backtrace for more info)
