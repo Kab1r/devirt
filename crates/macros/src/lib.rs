@@ -5,9 +5,12 @@
 //! is an implementation detail of `devirt` and should not be used
 //! directly.
 
+use std::collections::HashSet;
+
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use syn::punctuated::Punctuated;
+use syn::visit_mut::VisitMut;
 use syn::{Token, parse_macro_input};
 
 /// Proc-macro attribute for transparent devirtualization.
@@ -107,12 +110,6 @@ fn validate_trait(trait_item: &syn::ItemTrait) -> Result<(), syn::Error> {
 }
 
 fn validate_trait_method(f: &syn::TraitItemFn) -> Result<(), syn::Error> {
-    if f.default.is_some() {
-        return Err(syn::Error::new_spanned(
-            f,
-            "#[devirt] does not support default method bodies",
-        ));
-    }
     if f.sig.asyncness.is_some() {
         return Err(syn::Error::new_spanned(
             &f.sig,
@@ -164,20 +161,9 @@ fn emit_trait_expansion(
     let supertraits = &trait_item.supertraits;
     let inner_name = format_ident!("__{name}Impl");
 
-    // __spec_* method declarations for the inner trait.
-    let spec_decls: Vec<_> = trait_item
-        .items
-        .iter()
-        .filter_map(|item| {
-            let syn::TraitItem::Fn(m) = item else {
-                return None;
-            };
-            let mut spec_sig = m.sig.clone();
-            spec_sig.ident = format_ident!("__spec_{}", spec_sig.ident);
-            let attrs = &m.attrs;
-            Some(quote! { #(#attrs)* #spec_sig; })
-        })
-        .collect();
+    // __spec_* method declarations for the inner trait (with default
+    // bodies rewritten so `self.method()` → `self.__spec_method()`).
+    let spec_decls = generate_spec_decls(trait_item);
 
     // Dispatch methods for the inherent impl on `dyn Trait`.
     let dispatch_methods: Vec<_> = trait_item
@@ -295,6 +281,55 @@ fn emit_trait_expansion(
             for __DevirtT {}
     }
     .into()
+}
+
+// ── Default-body spec declarations ─────────────────────────────────────────
+
+/// Generate `__spec_*` method declarations for the inner trait.
+///
+/// Methods without a default body become required (`__spec_foo(...);`).
+/// Methods with a default body get the body rewritten so that
+/// `self.method()` calls become `self.__spec_method()`, then emitted
+/// as provided methods on the inner trait.
+fn generate_spec_decls(
+    trait_item: &syn::ItemTrait,
+) -> Vec<proc_macro2::TokenStream> {
+    let method_names: HashSet<String> = trait_item
+        .items
+        .iter()
+        .filter_map(|item| {
+            if let syn::TraitItem::Fn(m) = item {
+                Some(m.sig.ident.to_string())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    trait_item
+        .items
+        .iter()
+        .filter_map(|item| {
+            let syn::TraitItem::Fn(m) = item else {
+                return None;
+            };
+            let mut spec_sig = m.sig.clone();
+            spec_sig.ident = format_ident!("__spec_{}", spec_sig.ident);
+            let attrs = &m.attrs;
+
+            m.default.as_ref().map_or_else(
+                || Some(quote! { #(#attrs)* #spec_sig; }),
+                |default_body| {
+                    let mut body = default_body.clone();
+                    let mut rewriter = RewriteSelfCalls {
+                        method_names: method_names.clone(),
+                    };
+                    rewriter.visit_block_mut(&mut body);
+                    Some(quote! { #(#attrs)* #spec_sig #body })
+                },
+            )
+        })
+        .collect()
 }
 
 // ── Shared helpers ──────────────────────────────────────────────────────────
@@ -566,6 +601,20 @@ fn expand_impl(attr: &TokenStream, impl_item: &syn::ItemImpl) -> TokenStream {
     let inner_name = format_ident!("__{trait_name}Impl");
     let ty = &impl_item.self_ty;
 
+    // Collect method names so sibling calls in impl bodies
+    // (e.g. `self.area()`) are rewritten to `self.__spec_area()`.
+    let method_names: HashSet<String> = impl_item
+        .items
+        .iter()
+        .filter_map(|item| {
+            if let syn::ImplItem::Fn(m) = item {
+                Some(m.sig.ident.to_string())
+            } else {
+                None
+            }
+        })
+        .collect();
+
     let spec_methods: Vec<_> = impl_item
         .items
         .iter()
@@ -576,7 +625,11 @@ fn expand_impl(attr: &TokenStream, impl_item: &syn::ItemImpl) -> TokenStream {
             let mut spec_sig = m.sig.clone();
             spec_sig.ident = format_ident!("__spec_{}", spec_sig.ident);
             let attrs = &m.attrs;
-            let block = &m.block;
+            let mut block = m.block.clone();
+            let mut rewriter = RewriteSelfCalls {
+                method_names: method_names.clone(),
+            };
+            rewriter.visit_block_mut(&mut block);
             Some(quote! {
                 #(#attrs)*
                 #[inline]
@@ -592,4 +645,90 @@ fn expand_impl(attr: &TokenStream, impl_item: &syn::ItemImpl) -> TokenStream {
         }
     }
     .into()
+}
+
+// ── AST rewriting for default method bodies ────────────────────────────────
+
+/// Rewrites `self.method()` calls in default method bodies to
+/// `self.__spec_method()` so they resolve within the inner trait.
+struct RewriteSelfCalls {
+    /// Original method names defined on this trait.
+    method_names: HashSet<String>,
+}
+
+impl VisitMut for RewriteSelfCalls {
+    fn visit_expr_method_call_mut(&mut self, i: &mut syn::ExprMethodCall) {
+        // Recurse into sub-expressions first.
+        syn::visit_mut::visit_expr_method_call_mut(self, i);
+
+        // Only rewrite direct `self.method()` calls.
+        if is_self_expr(&i.receiver) {
+            let name = i.method.to_string();
+            if self.method_names.contains(&name) {
+                i.method = format_ident!("__spec_{}", i.method);
+            }
+        }
+    }
+
+    fn visit_macro_mut(&mut self, i: &mut syn::Macro) {
+        // `syn::visit_mut` does not descend into macro token streams,
+        // so we do a token-level rewrite for `self.method()` patterns
+        // inside macro invocations (e.g. `format!`, `write!`).
+        i.tokens =
+            rewrite_self_calls_in_tokens(&self.method_names, i.tokens.clone());
+    }
+}
+
+fn is_self_expr(expr: &syn::Expr) -> bool {
+    match expr {
+        syn::Expr::Path(p) => p.path.is_ident("self"),
+        // Handle `(self)` — parenthesized.
+        syn::Expr::Paren(p) => is_self_expr(&p.expr),
+        _ => false,
+    }
+}
+
+/// Token-level rewrite of `self . method_name` → `self . __spec_method_name`
+/// inside macro invocations, where `syn::visit_mut` cannot descend.
+fn rewrite_self_calls_in_tokens(
+    method_names: &HashSet<String>,
+    tokens: proc_macro2::TokenStream,
+) -> proc_macro2::TokenStream {
+    let tts: Vec<proc_macro2::TokenTree> = tokens.into_iter().collect();
+    let mut out = Vec::with_capacity(tts.len());
+    let mut i = 0;
+    while i < tts.len() {
+        // Match pattern: Ident("self")  Punct('.')  Ident(method_name)
+        if i + 2 < tts.len()
+            && let proc_macro2::TokenTree::Ident(ref id) = tts[i]
+            && *id == "self"
+            && let proc_macro2::TokenTree::Punct(ref dot) = tts[i + 1]
+            && dot.as_char() == '.'
+            && let proc_macro2::TokenTree::Ident(ref method) = tts[i + 2]
+            && method_names.contains(&method.to_string())
+        {
+            out.push(tts[i].clone());
+            out.push(tts[i + 1].clone());
+            out.push(proc_macro2::TokenTree::Ident(
+                proc_macro2::Ident::new(
+                    &format!("__spec_{method}"),
+                    method.span(),
+                ),
+            ));
+            i += 3;
+            continue;
+        }
+        // Recurse into groups (parenthesized, braced, bracketed).
+        if let proc_macro2::TokenTree::Group(ref g) = tts[i] {
+            let inner =
+                rewrite_self_calls_in_tokens(method_names, g.stream());
+            let mut ng = proc_macro2::Group::new(g.delimiter(), inner);
+            ng.set_span(g.span());
+            out.push(proc_macro2::TokenTree::Group(ng));
+        } else {
+            out.push(tts[i].clone());
+        }
+        i += 1;
+    }
+    out.into_iter().collect()
 }

@@ -13,6 +13,9 @@ fn ui_attr() {
     t.pass("tests/ui_attr/attr_supertraits.rs");
     t.pass("tests/ui_attr/attr_must_use.rs");
     t.pass("tests/ui_attr/attr_dyn_send.rs");
+    t.pass("tests/ui_attr/attr_default_body.rs");
+    t.pass("tests/ui_attr/attr_default_override.rs");
+    t.pass("tests/ui_attr/attr_default_send.rs");
     t.compile_fail("tests/ui_attr/attr_must_use_unused.rs");
     t.compile_fail("tests/ui_attr/attr_missing_args.rs");
     t.compile_fail("tests/ui_attr/attr_unsafe_missing_on_impl.rs");
