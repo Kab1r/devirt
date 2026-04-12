@@ -170,18 +170,18 @@ macro_rules! __devirt_define {
                 #[doc(hidden)]
                 #[inline(always)]
                 pub fn __devirt_vtable_for<
-                    T: [<__ $trait_name Impl>] + 'static,
+                    __DevirtT: [<__ $trait_name Impl>] + 'static,
                 >() -> usize {
-                    // A dangling, non-null, aligned `*const T`. We never
-                    // dereference it — the coercion below only reads the
-                    // vtable metadata the compiler attaches.
-                    let fake: *const T = ::core::ptr::without_provenance(
-                        ::core::mem::align_of::<T>(),
+                    // A dangling, non-null, aligned `*const __DevirtT`.
+                    // We never dereference it — the coercion below only
+                    // reads the vtable metadata the compiler attaches.
+                    let fake: *const __DevirtT = ::core::ptr::without_provenance(
+                        ::core::mem::align_of::<__DevirtT>(),
                     );
                     // Coercion is a metadata-attaching op; the resulting
-                    // fat pointer's vtable half is the `(T, $trait_name)`
-                    // vtable selected by the compiler. Its data half is
-                    // `fake`, which we discard.
+                    // fat pointer's vtable half is the
+                    // `(__DevirtT, $trait_name)` vtable selected by the
+                    // compiler. Its data half is `fake`, which we discard.
                     let fat: *const Self = fake;
                     // SAFETY: `*const Self` (dyn trait fat pointer) is
                     // two `usize`s by the compile-time assertion above.
@@ -229,7 +229,7 @@ macro_rules! __devirt_define {
             $(#[$meta])*
             $vis trait $trait_name: [<__ $trait_name Impl>] {}
 
-            impl<T: [<__ $trait_name Impl>] + ?Sized> $trait_name for T {}
+            impl<__DevirtT: [<__ $trait_name Impl>] + ?Sized> $trait_name for __DevirtT {}
         }
     };
 
