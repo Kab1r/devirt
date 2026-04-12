@@ -2,7 +2,7 @@ name: Verify
 
 on:
   schedule:
-    - cron: '0 3 * * *'  # 03:00 UTC daily
+    - cron: '0 3 * * 1'  # 03:00 UTC every Monday
   workflow_dispatch:
 
 env:
@@ -85,4 +85,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@5b842231ba77f5c045dba54ac5560fed2db780e2 # nightly
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - run: cargo install cargo-fuzz
-      - run: cargo +nightly fuzz run dispatch -- -max_total_time=300
+      - name: Restore fuzz corpus
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
+        with:
+          path: fuzz/corpus
+          key: fuzz-corpus-${{ github.run_id }}
+          restore-keys: fuzz-corpus-
+      - run: cargo +nightly fuzz run dispatch -- -max_total_time=3600
