@@ -156,11 +156,24 @@ mod attr_defaults {
         pub val: u64,
     }
 
+    /// Overrides the default `is_big`.
+    pub struct DefOver {
+        pub val: u64,
+    }
+
+    /// Relies on the `describe` default that uses `format!`.
+    pub struct DefFmt {
+        pub val: u64,
+    }
+
     #[devirt::devirt(DefHot)]
     pub trait Defaulted {
         fn get(&self) -> u64;
         fn is_big(&self) -> bool {
             self.get() > 100
+        }
+        fn describe(&self) -> String {
+            format!("val={}", self.get())
         }
     }
 
@@ -177,12 +190,31 @@ mod attr_defaults {
             self.val + 1
         }
     }
+
+    #[devirt::devirt]
+    impl Defaulted for DefOver {
+        fn get(&self) -> u64 {
+            self.val
+        }
+        fn is_big(&self) -> bool {
+            // Exercises sibling-call rewriting inside impl bodies:
+            // self.get() must be rewritten to self.__spec_get().
+            self.get() > 1000
+        }
+    }
+
+    #[devirt::devirt]
+    impl Defaulted for DefFmt {
+        fn get(&self) -> u64 {
+            self.val
+        }
+    }
 }
 
 #[cfg(feature = "macros")]
 #[test]
 fn attr_default_body_dispatch() {
-    use attr_defaults::{DefCold, DefHot, Defaulted};
+    use attr_defaults::{DefCold, DefFmt, DefHot, DefOver, Defaulted};
 
     // Hot type via &dyn Trait
     let h = DefHot { val: 200 };
@@ -203,6 +235,22 @@ fn attr_default_body_dispatch() {
     // Via &(dyn Trait + Send + Sync)
     let h4 = DefHot { val: 200 };
     assert!((&h4 as &(dyn Defaulted + Send + Sync)).is_big());
+
+    // Overridden default: DefOver uses `self.get() > 1000` (tests
+    // sibling-call rewriting in impl bodies).
+    let o = DefOver { val: 200 };
+    assert!(!(&o as &dyn Defaulted).is_big());
+    assert!(!(&o as &(dyn Defaulted + Send)).is_big());
+    let o2 = DefOver { val: 2000 };
+    assert!((&o2 as &dyn Defaulted).is_big());
+
+    // Default body with write! macro (exercises token-level rewriting)
+    let f = DefFmt { val: 42 };
+    assert_eq!((&f as &dyn Defaulted).describe(), "val=42");
+    assert_eq!((&f as &(dyn Defaulted + Send)).describe(), "val=42");
+    // Hot type's describe (also via default body)
+    let h5 = DefHot { val: 7 };
+    assert_eq!((&h5 as &dyn Defaulted).describe(), "val=7");
 }
 
 // ── Extended proc-macro tests: supertraits, method lifetimes, #[must_use] ──

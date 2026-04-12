@@ -601,6 +601,20 @@ fn expand_impl(attr: &TokenStream, impl_item: &syn::ItemImpl) -> TokenStream {
     let inner_name = format_ident!("__{trait_name}Impl");
     let ty = &impl_item.self_ty;
 
+    // Collect method names so sibling calls in impl bodies
+    // (e.g. `self.area()`) are rewritten to `self.__spec_area()`.
+    let method_names: HashSet<String> = impl_item
+        .items
+        .iter()
+        .filter_map(|item| {
+            if let syn::ImplItem::Fn(m) = item {
+                Some(m.sig.ident.to_string())
+            } else {
+                None
+            }
+        })
+        .collect();
+
     let spec_methods: Vec<_> = impl_item
         .items
         .iter()
@@ -611,7 +625,11 @@ fn expand_impl(attr: &TokenStream, impl_item: &syn::ItemImpl) -> TokenStream {
             let mut spec_sig = m.sig.clone();
             spec_sig.ident = format_ident!("__spec_{}", spec_sig.ident);
             let attrs = &m.attrs;
-            let block = &m.block;
+            let mut block = m.block.clone();
+            let mut rewriter = RewriteSelfCalls {
+                method_names: method_names.clone(),
+            };
+            rewriter.visit_block_mut(&mut block);
             Some(quote! {
                 #(#attrs)*
                 #[inline]
