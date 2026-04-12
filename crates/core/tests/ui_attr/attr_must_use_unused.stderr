@@ -1,0 +1,15 @@
+error: unused return value of `<(dyn Computed + '__devirt)>::compute` that must be used
+  --> tests/ui_attr/attr_must_use_unused.rs:24:5
+   |
+24 |     d.compute(); // ERROR: unused return value that must be used
+   |     ^^^^^^^^^^^
+   |
+note: the lint level is defined here
+  --> tests/ui_attr/attr_must_use_unused.rs:4:9
+   |
+ 4 | #![deny(unused_must_use)]
+   |         ^^^^^^^^^^^^^^^
+help: use `let _ = ...` to ignore the resulting value
+   |
+24 |     let _ = d.compute(); // ERROR: unused return value that must be used
+   |     +++++++

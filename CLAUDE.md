@@ -51,8 +51,8 @@ verus crates/verify/src/lib.rs --crate-type=lib
 
 This is a workspace with four crates:
 
-- **`crates/core`** (`devirt`) — the main macro library. Exports `devirt!` (declarative) or `#[devirt]` (proc-macro attribute) depending on the `macros` feature (on by default). Both delegate to the internal `__devirt_define!` macro.
-- **`crates/macros`** (`devirt-macros`) — proc-macro crate providing the `#[devirt]` attribute. Optional dependency of `crates/core`, enabled by the `macros` feature.
+- **`crates/core`** (`devirt`) — the main macro library. Exports `devirt!` (declarative) or `#[devirt]` (proc-macro attribute) depending on the `macros` feature (on by default). The declarative macro delegates to the internal `__devirt_define!` macro; the proc-macro attribute emits expansion directly via `quote!`.
+- **`crates/macros`** (`devirt-macros`) — proc-macro crate providing the `#[devirt]` attribute. Emits the dispatch expansion directly (not via `__devirt_define!`), giving it full `syn`-level signature fidelity. Optional dependency of `crates/core`, enabled by the `macros` feature.
 - **`crates/verify`** (`devirt-verify`) — Verus formal proofs of dispatch correctness.
 - **`fuzz`** — libfuzzer differential fuzzing comparing devirt dispatch vs. plain vtable.
 
@@ -64,15 +64,15 @@ Why inherent methods on `dyn Trait` and not trait default methods: a default met
 
 ### Macro Structure
 
-All dispatch expansion logic lives in `__devirt_define!` (`#[doc(hidden)]`, `#[macro_export]`, always available). It has two entry points:
+There are two independent expansion paths:
+
+- **`#[devirt::devirt(Hot1, Hot2)]`** (proc-macro attribute, default) — parses the trait/impl with `syn` and emits the full expansion directly via `quote!`. Supports `unsafe trait`/`unsafe fn`, method lifetimes, method attributes, supertraits, `extern "ABI" fn`, and method `where` clauses.
+- **`devirt::devirt!`** (declarative macro, `default-features = false`) — thin dispatcher that forwards to `$crate::__devirt_define!`, a `#[doc(hidden)]` `#[macro_export]` internal macro with limited syntax support (plain `fn method(&self, arg: Type) -> Ret;` signatures only).
+
+`__devirt_define!` has two entry points:
 
 - `__devirt_define! { @trait ... }` — generates the trait, inner trait, dispatch shim, blanket impl
 - `__devirt_define! { @impl ... }` — generates `impl __TraitNameImpl for T { __spec_* ... }`
-
-The public APIs delegate to it:
-
-- **`#[devirt::devirt(Hot1, Hot2)]`** (proc-macro attribute, default) — parses the trait/impl and emits `::devirt::__devirt_define!` calls
-- **`devirt::devirt!`** (declarative macro, `default-features = false`) — thin dispatcher that forwards to `$crate::__devirt_define!`
 
 ### `__devirt_define! { @trait ... }` Expansion
 
@@ -88,7 +88,7 @@ For a trait `Foo` with hot types `[A, B]`:
 For `impl Foo for A { ... }`:
 - Expands to `impl __FooImpl for A { fn __spec_method(...) { ... } }`.
 
-### Dispatch Arms (inside `__devirt_define!`)
+### Dispatch Arms (inside `__devirt_define!`, declarative-macro path only)
 
 Four arms handle the combinatorics of `&self`/`&mut self` × void/non-void. Each splits into an outer "set up `__raw`" arm and a recursive `*_chain` arm that walks the hot-type list:
 - `@dispatch_ref` / `@dispatch_ref_chain` — `&self`, returns value
