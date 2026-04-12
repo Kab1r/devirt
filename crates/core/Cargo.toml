@@ -2,6 +2,7 @@
 name = "devirt"
 version.workspace = true
 edition.workspace = true
+rust-version = "1.85"
 license.workspace = true
 repository.workspace = true
 readme = "../../README.md"
@@ -11,14 +12,28 @@ categories = ["no-std", "rust-patterns"]
 
 [dependencies]
 paste.workspace = true
+devirt-macros = { workspace = true, optional = true }
+
+[features]
+default = ["macros"]
+macros = ["dep:devirt-macros"]
 
 [dev-dependencies]
 criterion.workspace = true
 trybuild.workspace = true
 
+[[example]]
+name = "shapes"
+required-features = ["macros"]
+
+[[test]]
+name = "ui_attr"
+required-features = ["macros"]
+
 [[bench]]
 name = "dispatch"
 harness = false
+required-features = ["macros"]
 
 [lints]
 workspace = true

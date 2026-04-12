@@ -2,7 +2,8 @@ struct Inner {
     val: i32,
 }
 
-devirt::r#trait! {
+devirt::__devirt_define! {
+    @trait []
     /// A public trait with documentation.
     pub DocTrait [Inner] {
         /// Returns the inner value.
@@ -10,9 +11,9 @@ devirt::r#trait! {
     }
 }
 
-devirt::r#impl!(DocTrait for Inner [hot] {
+devirt::__devirt_define! { @impl [] DocTrait for Inner {
     fn get(&self) -> i32 { self.val }
-});
+}}
 
 fn main() {
     let d: Box<dyn DocTrait> = Box::new(Inner { val: 42 });

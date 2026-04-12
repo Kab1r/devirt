@@ -4,7 +4,7 @@
 //! extracts the vtable pointer from the `&dyn Trait` fat pointer and compares
 //! it against the compile-time-known vtable address for each hot type. On
 //! match, the data pointer is reinterpreted as `&HotType` and the method is
-//! called directly (fully inlined under LTO). On miss, the shim falls through
+//! called directly (fully inlined). On miss, the shim falls through
 //! to a single vtable call via the hidden `__spec_*` method.
 //!
 //! This eliminates the indirect call entirely on hot paths — there is no
@@ -14,64 +14,67 @@
 //!
 //! # Architecture
 //!
-//! `r#trait!` generates:
+//! The trait definition (`#[devirt::devirt(Hot1, Hot2)]` or
+//! `devirt::devirt! { trait Foo [Hot1, Hot2] { ... } }`) generates:
 //! - A hidden inner trait `__XImpl` with `__spec_*` method declarations
 //! - Two `#[doc(hidden)]` inherent helpers on `dyn X`:
 //!   `__devirt_raw_parts` (extracts `[data, vtable]` from a fat pointer)
 //!   and `__devirt_vtable_for::<T>()` (returns the compiler-assigned
 //!   vtable address for `(T, X)`)
-//! - A public trait `X` with default methods whose bodies compare the
+//! - Inherent dispatch methods on `dyn X` whose bodies compare the
 //!   runtime vtable pointer against each hot type's vtable and dispatch
 //!   directly on match, or fall through to `__spec_*` otherwise
 //! - A blanket impl: `impl<T: __XImpl> X for T {}`
 //!
-//! `r#impl!` generates:
+//! The impl (`#[devirt::devirt]` or `devirt::devirt! { impl Foo for T { ... } }`)
+//! generates:
 //! - `impl __XImpl for ConcreteType { ... }` with the `__spec_*` bodies
-//! - The `[hot]` marker is accepted for backward compatibility but is
-//!   purely documentary now: the hot-path optimization is driven entirely
-//!   by the trait's hot-type list, not by per-impl overrides
+//!
+//! Both the proc-macro attribute and the declarative macro delegate to
+//! `__devirt_define!`, a `#[doc(hidden)]` internal macro that contains
+//! all dispatch expansion logic.
 //!
 //! # Usage
 //!
 //! ```ignore
-//! devirt::r#trait! {
-//!     pub MyTrait [HotType1, HotType2] {
-//!         /// Doc for the method.
+//! // With proc-macro attribute (default):
+//! #[devirt::devirt(HotType1, HotType2)]
+//! pub trait MyTrait {
+//!     fn method(&self) -> ReturnType;
+//! }
+//!
+//! #[devirt::devirt]
+//! impl MyTrait for HotType1 {
+//!     fn method(&self) -> ReturnType { ... }
+//! }
+//!
+//! // With declarative macro (default-features = false):
+//! devirt::devirt! {
+//!     pub trait MyTrait [HotType1, HotType2] {
 //!         fn method(&self) -> ReturnType;
 //!     }
 //! }
 //!
-//! // Hot type — vtable-compare match, directly inlined under LTO
-//! devirt::r#impl!(MyTrait for HotType1 [hot] {
-//!     fn method(&self) -> ReturnType { ... }
-//! });
-//!
-//! // Cold type — vtable-compare miss, falls back to vtable call
-//! devirt::r#impl!(MyTrait for ColdType {
-//!     fn method(&self) -> ReturnType { ... }
-//! });
+//! devirt::devirt! {
+//!     impl MyTrait for HotType1 {
+//!         fn method(&self) -> ReturnType { ... }
+//!     }
+//! }
 //! ```
 //!
-//! # Required: enable LTO
+//! # LTO
 //!
-//! This crate relies on cross-function inlining and cross-CGU vtable
-//! deduplication to eliminate dispatch overhead. Without LTO, the helper
-//! fns may not inline and the vtable comparison may always miss (because
-//! the trait and the hot type's impl live in different codegen units),
-//! degrading to plain vtable dispatch.
-//!
-//! ```toml
-//! [profile.release]
-//! lto = "thin"
-//! codegen-units = 1
-//! ```
+//! LTO is **not required**. All dispatch logic expands via macros into
+//! the user's crate, so there are no cross-crate function calls to
+//! inline. Vtable deduplication works within a single crate via COMDAT
+//! groups, even with multiple codegen units.
 //!
 //! # Performance characteristics
 //!
-//! With LTO enabled, hot-type dispatch is a single `cmp + je` against a
-//! RIP-relative vtable address followed by an inlined method body — **no
-//! indirect call**. Cold types pay a small branch-per-hot-type penalty on
-//! the dispatch shim before the vtable fallback.
+//! Hot-type dispatch is a single `cmp + je` against a RIP-relative vtable
+//! address followed by an inlined method body — **no indirect call**. Cold
+//! types pay a small branch-per-hot-type penalty on the dispatch shim
+//! before the vtable fallback.
 //!
 //! The crate is most effective when hot types dominate the population (80%+
 //! of trait objects). It is especially effective on *shuffled* collections
@@ -118,34 +121,10 @@ extern crate kani;
 #[doc(hidden)]
 pub use paste::paste as __paste;
 
-/// Declares a trait with transparent devirtualization.
-///
-/// Hot types listed in brackets get vtable-pointer-comparison dispatch:
-/// at each call site the dispatch shim compares the runtime vtable
-/// pointer against the compile-time-known vtable for each hot type and,
-/// on match, calls the concrete method directly (fully inlined under
-/// LTO). Cold types fall through to normal vtable dispatch. Callers use
-/// plain `dyn Trait` — no wrappers, no special calls.
-///
-/// # Syntax
-///
-/// ```ignore
-/// devirt::r#trait! {
-///     pub MyTrait [HotType1, HotType2] {
-///         /// Doc comment forwarded to the generated trait method.
-///         fn method(&self) -> ReturnType;
-///         fn mut_method(&mut self, arg: ArgType);
-///     }
-/// }
-/// ```
-///
-/// # Notes
-///
-/// Hot types must be simple, unqualified type names (e.g., `Circle`, not
-/// `crate::Circle`).
+#[doc(hidden)]
 #[macro_export]
-macro_rules! r#trait {
-    (
+macro_rules! __devirt_define {
+    (@trait [$($unsafety:tt)*]
         $(#[$meta:meta])*
         $vis:vis $trait_name:ident [$($hot:ty),+ $(,)?] {
             $($methods:tt)*
@@ -153,8 +132,8 @@ macro_rules! r#trait {
     ) => {
         $crate::__paste! {
             #[doc(hidden)]
-            $vis trait [<__ $trait_name Impl>] {
-                $crate::r#trait!{@spec_decl $($methods)*}
+            $vis $($unsafety)* trait [<__ $trait_name Impl>] {
+                $crate::__devirt_define!{@spec_decl $($methods)*}
             }
 
             // Compile-time sanity check: `*const dyn Trait` must be a fat
@@ -191,18 +170,18 @@ macro_rules! r#trait {
                 #[doc(hidden)]
                 #[inline(always)]
                 pub fn __devirt_vtable_for<
-                    T: [<__ $trait_name Impl>] + 'static,
+                    __DevirtT: [<__ $trait_name Impl>] + 'static,
                 >() -> usize {
-                    // A dangling, non-null, aligned `*const T`. We never
-                    // dereference it — the coercion below only reads the
-                    // vtable metadata the compiler attaches.
-                    let fake: *const T = ::core::ptr::without_provenance(
-                        ::core::mem::align_of::<T>(),
+                    // A dangling, non-null, aligned `*const __DevirtT`.
+                    // We never dereference it — the coercion below only
+                    // reads the vtable metadata the compiler attaches.
+                    let fake: *const __DevirtT = ::core::ptr::without_provenance(
+                        ::core::mem::align_of::<__DevirtT>(),
                     );
                     // Coercion is a metadata-attaching op; the resulting
-                    // fat pointer's vtable half is the `(T, $trait_name)`
-                    // vtable selected by the compiler. Its data half is
-                    // `fake`, which we discard.
+                    // fat pointer's vtable half is the
+                    // `(__DevirtT, $trait_name)` vtable selected by the
+                    // compiler. Its data half is `fake`, which we discard.
                     let fat: *const Self = fake;
                     // SAFETY: `*const Self` (dyn trait fat pointer) is
                     // two `usize`s by the compile-time assertion above.
@@ -226,7 +205,7 @@ macro_rules! r#trait {
             // $trait_name`) avoids the `Self: Sized` requirement that
             // would otherwise arise in a default method body.
             impl<'__devirt> dyn $trait_name + '__devirt {
-                $crate::r#trait!{
+                $crate::__devirt_define!{
                     @inherent_decl
                     [<__ $trait_name Impl>],
                     $trait_name,
@@ -248,9 +227,9 @@ macro_rules! r#trait {
             // (...)` or call `<T as __${trait_name}Impl>::__spec_$method
             // (&t, ...)` via UFCS.
             $(#[$meta])*
-            $vis trait $trait_name: [<__ $trait_name Impl>] {}
+            $vis $($unsafety)* trait $trait_name: [<__ $trait_name Impl>] {}
 
-            impl<T: [<__ $trait_name Impl>] + ?Sized> $trait_name for T {}
+            $($unsafety)* impl<__DevirtT: [<__ $trait_name Impl>] + ?Sized> $trait_name for __DevirtT {}
         }
     };
 
@@ -264,7 +243,7 @@ macro_rules! r#trait {
         $crate::__paste! {
             fn [<__spec_ $method>](&self $(, $arg: $argty)*) $(-> $ret)?;
         }
-        $crate::r#trait!{@spec_decl $($rest)*}
+        $crate::__devirt_define!{@spec_decl $($rest)*}
     };
 
     (@spec_decl
@@ -275,7 +254,7 @@ macro_rules! r#trait {
         $crate::__paste! {
             fn [<__spec_ $method>](&mut self $(, $arg: $argty)*) $(-> $ret)?;
         }
-        $crate::r#trait!{@spec_decl $($rest)*}
+        $crate::__devirt_define!{@spec_decl $($rest)*}
     };
 
     (@spec_decl) => {};
@@ -294,16 +273,17 @@ macro_rules! r#trait {
         $($rest:tt)*
     ) => {
         $crate::__paste! {
+            $(#[$attr])*
             #[inline]
             #[doc(hidden)]
             pub fn $method(&self $(, $arg: $argty)*) -> $ret {
-                $crate::r#trait!(
+                $crate::__devirt_define!(
                     @dispatch_ref
                     $inner, $trait_name, self, $method, ($($arg),*), [$($hot),+]
                 )
             }
         }
-        $crate::r#trait!{@inherent_decl $inner, $trait_name, [$($hot),+], $($rest)*}
+        $crate::__devirt_define!{@inherent_decl $inner, $trait_name, [$($hot),+], $($rest)*}
     };
 
     // &self, void
@@ -313,16 +293,17 @@ macro_rules! r#trait {
         $($rest:tt)*
     ) => {
         $crate::__paste! {
+            $(#[$attr])*
             #[inline]
             #[doc(hidden)]
             pub fn $method(&self $(, $arg: $argty)*) {
-                $crate::r#trait!(
+                $crate::__devirt_define!(
                     @dispatch_void
                     $inner, $trait_name, self, $method, ($($arg),*), [$($hot),+]
                 )
             }
         }
-        $crate::r#trait!{@inherent_decl $inner, $trait_name, [$($hot),+], $($rest)*}
+        $crate::__devirt_define!{@inherent_decl $inner, $trait_name, [$($hot),+], $($rest)*}
     };
 
     // &mut self, non-void
@@ -332,16 +313,17 @@ macro_rules! r#trait {
         $($rest:tt)*
     ) => {
         $crate::__paste! {
+            $(#[$attr])*
             #[inline]
             #[doc(hidden)]
             pub fn $method(&mut self $(, $arg: $argty)*) -> $ret {
-                $crate::r#trait!(
+                $crate::__devirt_define!(
                     @dispatch_mut
                     $inner, $trait_name, self, $method, ($($arg),*), [$($hot),+]
                 )
             }
         }
-        $crate::r#trait!{@inherent_decl $inner, $trait_name, [$($hot),+], $($rest)*}
+        $crate::__devirt_define!{@inherent_decl $inner, $trait_name, [$($hot),+], $($rest)*}
     };
 
     // &mut self, void
@@ -351,16 +333,17 @@ macro_rules! r#trait {
         $($rest:tt)*
     ) => {
         $crate::__paste! {
+            $(#[$attr])*
             #[inline]
             #[doc(hidden)]
             pub fn $method(&mut self $(, $arg: $argty)*) {
-                $crate::r#trait!(
+                $crate::__devirt_define!(
                     @dispatch_mut_void
                     $inner, $trait_name, self, $method, ($($arg),*), [$($hot),+]
                 )
             }
         }
-        $crate::r#trait!{@inherent_decl $inner, $trait_name, [$($hot),+], $($rest)*}
+        $crate::__devirt_define!{@inherent_decl $inner, $trait_name, [$($hot),+], $($rest)*}
     };
 
     (@inherent_decl $inner:ident, $trait_name:ident, [$($hot:ty),+],) => {};
@@ -384,7 +367,7 @@ macro_rules! r#trait {
     ) => {{
         let __raw: [usize; 2] =
             <dyn $trait_name>::__devirt_raw_parts($this);
-        $crate::r#trait!(@dispatch_ref_chain
+        $crate::__devirt_define!(@dispatch_ref_chain
             $inner, $trait_name, $this, $method, ($($arg),*), [$($hot),+], __raw)
     }};
 
@@ -406,7 +389,7 @@ macro_rules! r#trait {
                 __concrete.[<__spec_ $method>]($($arg),*)
             };
         }
-        $crate::r#trait!(@dispatch_ref_chain
+        $crate::__devirt_define!(@dispatch_ref_chain
             $inner, $trait_name, $this, $method, ($($arg),*), [$($rest),*], $raw)
     }};
 
@@ -423,7 +406,7 @@ macro_rules! r#trait {
     ) => {{
         let __raw: [usize; 2] =
             <dyn $trait_name>::__devirt_raw_parts($this);
-        $crate::r#trait!(@dispatch_void_chain
+        $crate::__devirt_define!(@dispatch_void_chain
             $inner, $trait_name, $this, $method, ($($arg),*), [$($hot),+], __raw)
     }};
 
@@ -439,7 +422,7 @@ macro_rules! r#trait {
             }
             return;
         }
-        $crate::r#trait!(@dispatch_void_chain
+        $crate::__devirt_define!(@dispatch_void_chain
             $inner, $trait_name, $this, $method, ($($arg),*), [$($rest),*], $raw)
     }};
 
@@ -467,7 +450,7 @@ macro_rules! r#trait {
         // mutable alias.
         let __raw: [usize; 2] =
             <dyn $trait_name>::__devirt_raw_parts(&*$this);
-        $crate::r#trait!(@dispatch_mut_chain
+        $crate::__devirt_define!(@dispatch_mut_chain
             $inner, $trait_name, $this, $method, ($($arg),*), [$($hot),+], __raw)
     }};
 
@@ -486,7 +469,7 @@ macro_rules! r#trait {
                 __ref.[<__spec_ $method>]($($arg),*)
             };
         }
-        $crate::r#trait!(@dispatch_mut_chain
+        $crate::__devirt_define!(@dispatch_mut_chain
             $inner, $trait_name, $this, $method, ($($arg),*), [$($rest),*], $raw)
     }};
 
@@ -503,7 +486,7 @@ macro_rules! r#trait {
     ) => {{
         let __raw: [usize; 2] =
             <dyn $trait_name>::__devirt_raw_parts(&*$this);
-        $crate::r#trait!(@dispatch_mut_void_chain
+        $crate::__devirt_define!(@dispatch_mut_void_chain
             $inner, $trait_name, $this, $method, ($($arg),*), [$($hot),+], __raw)
     }};
 
@@ -519,7 +502,7 @@ macro_rules! r#trait {
             }
             return;
         }
-        $crate::r#trait!(@dispatch_mut_void_chain
+        $crate::__devirt_define!(@dispatch_mut_void_chain
             $inner, $trait_name, $this, $method, ($($arg),*), [$($rest),*], $raw)
     }};
 
@@ -528,61 +511,119 @@ macro_rules! r#trait {
     ) => {
         $crate::__paste! { $inner::[<__spec_ $method>] }(&mut *$this $(, $arg)*)
     };
-}
 
-/// Implements a devirtualized trait for a concrete type.
-///
-/// The optional `[hot]` marker is accepted for backward compatibility and
-/// as documentation that this type appears in the trait's hot list. It
-/// does not change the expansion — hot-path specialization is driven
-/// entirely by the trait's hot-type list via vtable-pointer comparison
-/// in the generated dispatch shim.
-///
-/// # Syntax
-///
-/// ```ignore
-/// // Hot type (listed in the trait's `[...]` hot list):
-/// devirt::r#impl!(MyTrait for HotType [hot] {
-///     fn method(&self) -> ReturnType { ... }
-/// });
-///
-/// // Cold type (not in the hot list):
-/// devirt::r#impl!(MyTrait for ColdType {
-///     fn method(&self) -> ReturnType { ... }
-/// });
-/// ```
-///
-/// # Notes
-///
-/// The type name in `[hot]` impls must be the same simple, unqualified name
-/// used in the `r#trait!` hot list.
-#[macro_export]
-macro_rules! r#impl {
-    // Cold impl — or equivalently, any impl without the `[hot]` marker.
-    ($trait_name:ident for $type:ty {
-        $(fn $method:ident( $($args:tt)* ) $(-> $ret:ty)? { $($body:tt)* })*
+    // ── @impl: implement a devirtualized trait for a concrete type ──────────
+
+    (@impl [$($unsafety:tt)*] $trait_name:ident for $type:ty {
+        $(
+            $(#[$method_attr:meta])*
+            fn $method:ident( $($args:tt)* ) $(-> $ret:ty)? { $($body:tt)* }
+        )*
     }) => {
         $crate::__paste! {
-            impl [<__ $trait_name Impl>] for $type {
+            $($unsafety)* impl [<__ $trait_name Impl>] for $type {
                 $(
+                    $(#[$method_attr])*
                     #[inline]
                     fn [<__spec_ $method>]( $($args)* ) $(-> $ret)? { $($body)* }
                 )*
             }
         }
     };
+}
 
-    // Hot impl — the `[hot]` marker is purely documentary; the expansion
-    // is identical to the cold impl above because hot-path specialization
-    // is driven by the trait's hot list, not by per-impl overrides.
-    ($trait_name:ident for $type:ty [hot] {
-        $(fn $method:ident( $($args:tt)* ) $(-> $ret:ty)? { $($body:tt)* })*
-    }) => {
-        $crate::r#impl!($trait_name for $type {
-            $(fn $method( $($args)* ) $(-> $ret)? { $($body)* })*
-        });
+/// Declares a devirtualized trait or implements one for a concrete type.
+///
+/// Available when the `macros` feature is disabled (i.e.,
+/// `default-features = false`). When the default `macros` feature is
+/// enabled, use the `#[devirt::devirt]` proc-macro attribute instead.
+///
+/// # Syntax
+///
+/// ```ignore
+/// // Define a trait with hot types
+/// devirt::devirt! {
+///     pub trait MyTrait [HotType1, HotType2] {
+///         fn method(&self) -> ReturnType;
+///         fn mut_method(&mut self, arg: ArgType);
+///     }
+/// }
+///
+/// // Implement for a concrete type
+/// devirt::devirt! {
+///     impl MyTrait for HotType1 {
+///         fn method(&self) -> ReturnType { ... }
+///         fn mut_method(&mut self, arg: ArgType) { ... }
+///     }
+/// }
+/// ```
+#[cfg(not(feature = "macros"))]
+#[macro_export]
+macro_rules! devirt {
+    // Trait definition
+    (
+        $(#[$meta:meta])*
+        $vis:vis trait $name:ident [$($hot:ty),+ $(,)?] {
+            $($methods:tt)*
+        }
+    ) => {
+        $crate::__devirt_define! {
+            @trait []
+            $(#[$meta])*
+            $vis $name [$($hot),+] {
+                $($methods)*
+            }
+        }
+    };
+
+    // Unsafe trait definition
+    (
+        $(#[$meta:meta])*
+        $vis:vis unsafe trait $name:ident [$($hot:ty),+ $(,)?] {
+            $($methods:tt)*
+        }
+    ) => {
+        $crate::__devirt_define! {
+            @trait [unsafe]
+            $(#[$meta])*
+            $vis $name [$($hot),+] {
+                $($methods)*
+            }
+        }
+    };
+
+    // Impl block
+    (
+        impl $trait_name:ident for $type:ty {
+            $($methods:tt)*
+        }
+    ) => {
+        $crate::__devirt_define! {
+            @impl []
+            $trait_name for $type {
+                $($methods)*
+            }
+        }
+    };
+
+    // Unsafe impl block
+    (
+        unsafe impl $trait_name:ident for $type:ty {
+            $($methods:tt)*
+        }
+    ) => {
+        $crate::__devirt_define! {
+            @impl [unsafe]
+            $trait_name for $type {
+                $($methods)*
+            }
+        }
     };
 }
+
+// Re-export the proc-macro attribute when the `macros` feature is enabled.
+#[cfg(feature = "macros")]
+pub use devirt_macros::devirt;
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // Unit tests for the unsafe primitives — verify the fat pointer layout
@@ -605,27 +646,28 @@ mod primitives {
         val: u64,
     }
 
-    crate::r#trait! {
+    crate::__devirt_define! {
+        @trait []
         pub Probe [Hot, Also] {
             fn get(&self) -> u64;
             fn set(&mut self, v: u64);
         }
     }
 
-    crate::r#impl!(Probe for Hot [hot] {
+    crate::__devirt_define! { @impl [] Probe for Hot {
         fn get(&self) -> u64 { self.val }
         fn set(&mut self, v: u64) { self.val = v; }
-    });
+    }}
 
-    crate::r#impl!(Probe for Also [hot] {
+    crate::__devirt_define! { @impl [] Probe for Also {
         fn get(&self) -> u64 { self.val.wrapping_add(1) }
         fn set(&mut self, v: u64) { self.val = v.wrapping_add(1); }
-    });
+    }}
 
-    crate::r#impl!(Probe for Cold {
+    crate::__devirt_define! { @impl [] Probe for Cold {
         fn get(&self) -> u64 { self.val.wrapping_sub(1) }
         fn set(&mut self, v: u64) { self.val = v.wrapping_sub(1); }
-    });
+    }}
 
     /// The fat pointer's first half is the data pointer, second is vtable.
     /// If this ever fails, every unsafe operation in the dispatch shim

@@ -1,18 +1,18 @@
 error[E0053]: method `__spec_compute` has an incompatible type for trait
-  --> tests/ui/wrong_signature.rs:10:26
+  --> tests/ui/wrong_signature.rs:11:26
    |
-10 |     fn compute(&self, x: u32) -> f64 { f64::from(x) }
+11 |     fn compute(&self, x: u32) -> f64 { f64::from(x) }
    |                          ^^^ expected `f64`, found `u32`
    |
 note: type in trait
-  --> tests/ui/wrong_signature.rs:5:30
+  --> tests/ui/wrong_signature.rs:6:30
    |
- 5 |         fn compute(&self, x: f64) -> f64;
+ 6 |         fn compute(&self, x: f64) -> f64;
    |                              ^^^
    = note: expected signature `fn(&Bar, f64) -> f64`
               found signature `fn(&Bar, u32) -> f64`
 help: change the parameter type to match the trait
    |
-10 -     fn compute(&self, x: u32) -> f64 { f64::from(x) }
-10 +     fn compute(&self, x: f64) -> f64 { f64::from(x) }
+11 -     fn compute(&self, x: u32) -> f64 { f64::from(x) }
+11 +     fn compute(&self, x: f64) -> f64 { f64::from(x) }
    |

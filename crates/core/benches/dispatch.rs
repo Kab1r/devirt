@@ -28,31 +28,33 @@ struct Hexagon {
 
 // ── Devirtualized trait (devirt macros) ───────────────────────────────────────
 
-devirt::r#trait! {
-    pub Shape [Circle, Rect] {
-        fn area(&self) -> f64;
-        fn scale(&mut self, factor: f64);
-    }
+#[devirt::devirt(Circle, Rect)]
+pub trait Shape {
+    fn area(&self) -> f64;
+    fn scale(&mut self, factor: f64);
 }
 
-devirt::r#impl!(Shape for Circle [hot] {
+#[devirt::devirt]
+impl Shape for Circle {
     fn area(&self) -> f64 {
         core::f64::consts::PI * self.radius * self.radius
     }
     fn scale(&mut self, factor: f64) {
         self.radius *= factor;
     }
-});
+}
 
-devirt::r#impl!(Shape for Rect [hot] {
+#[devirt::devirt]
+impl Shape for Rect {
     fn area(&self) -> f64 { self.w * self.h }
     fn scale(&mut self, factor: f64) {
         self.w *= factor;
         self.h *= factor;
     }
-});
+}
 
-devirt::r#impl!(Shape for Triangle {
+#[devirt::devirt]
+impl Shape for Triangle {
     fn area(&self) -> f64 {
         let s = (self.a + self.b + self.c) / 2.0;
         (s * (s - self.a) * (s - self.b) * (s - self.c)).sqrt()
@@ -62,12 +64,13 @@ devirt::r#impl!(Shape for Triangle {
         self.b *= factor;
         self.c *= factor;
     }
-});
+}
 
-devirt::r#impl!(Shape for Hexagon {
+#[devirt::devirt]
+impl Shape for Hexagon {
     fn area(&self) -> f64 { 1.5 * 3.0_f64.sqrt() * self.side * self.side }
     fn scale(&mut self, factor: f64) { self.side *= factor; }
-});
+}
 
 // ── Explicit Branch-Based Dispatch ───────────────────────────────────────────
 // This shows what pure branch-based dispatch looks like (comparing TypeTag enum)

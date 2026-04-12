@@ -1,0 +1,7 @@
+error: #[devirt] can only be applied to trait definitions or impl blocks
+ --> tests/ui_attr/attr_on_struct.rs:1:1
+  |
+1 | #[devirt::devirt(Foo)]
+  | ^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `devirt::devirt` (in Nightly builds, run with -Z macro-backtrace for more info)

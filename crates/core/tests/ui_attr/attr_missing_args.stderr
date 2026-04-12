@@ -1,0 +1,7 @@
+error: expected hot types: #[devirt(Type1, Type2)]
+ --> tests/ui_attr/attr_missing_args.rs:3:1
+  |
+3 | #[devirt::devirt]
+  | ^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `devirt::devirt` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -1,14 +1,15 @@
 struct Foo;
 
-devirt::r#trait! {
+devirt::__devirt_define! {
+    @trait []
     pub TwoMethods [Foo] {
         fn first(&self) -> i32;
         fn second(&self) -> i32;
     }
 }
 
-devirt::r#impl!(TwoMethods for Foo [hot] {
+devirt::__devirt_define! { @impl [] TwoMethods for Foo {
     fn first(&self) -> i32 { 1 }
-});
+}}
 
 fn main() {}

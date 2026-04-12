@@ -12,66 +12,95 @@ through `&dyn Trait`, the generated dispatch shim extracts the vtable
 pointer from the fat pointer and compares it against compile-time-known
 vtable addresses for each hot type. On a match, the data pointer is
 reinterpreted as `&HotType` and the method is called directly (fully
-inlined under LTO) — no vtable lookup, no indirect call. On a miss, the
-shim falls through to a single vtable call via the hidden `__spec_*`
-method. Callers use plain `dyn Trait` — no wrappers, no special calls,
-zero API change at call sites.
-
-## LTO required
-
-This crate relies on cross-function inlining **and** cross-CGU vtable
-deduplication. **Without LTO, the vtable-comparison may always miss
-(because the trait and the hot type's impl live in different codegen units
-and their vtables are not deduplicated), silently degrading to plain
-`dyn Trait` dispatch.**
-
-Add this to your `Cargo.toml`:
-
-```toml
-[profile.release]
-lto = "thin"
-codegen-units = 1
-```
+inlined) — no vtable lookup, no indirect call. On a miss, the shim falls
+through to a single vtable call via the hidden `__spec_*` method.
+Callers use plain `dyn Trait` — no wrappers, no special calls, zero API
+change at call sites.
 
 ## Usage
 
-```rust
-use devirt;
+The default API uses a proc-macro attribute:
 
-// 1. Define trait — list hot types in brackets
-devirt::r#trait! {
-    pub Shape [Circle, Rect] {
-        fn area(&self) -> f64;
-        fn perimeter(&self) -> f64;
-        fn scale(&mut self, factor: f64);
-    }
+```rust
+use std::f64::consts::PI;
+
+struct Circle { radius: f64 }
+struct Rect { w: f64, h: f64 }
+struct Triangle { a: f64, b: f64, c: f64 }
+
+// 1. Define trait — list hot types in the attribute
+#[devirt::devirt(Circle, Rect)]
+pub trait Shape {
+    fn area(&self) -> f64;
+    fn perimeter(&self) -> f64;
+    fn scale(&mut self, factor: f64);
 }
 
-// 2. Hot type — vtable-cmp match, direct inlined call under LTO
-devirt::r#impl!(Shape for Circle [hot] {
-    fn area(&self) -> f64 {
-        core::f64::consts::PI * self.radius * self.radius
-    }
-    fn perimeter(&self) -> f64 {
-        2.0 * core::f64::consts::PI * self.radius
-    }
-    fn scale(&mut self, factor: f64) {
-        self.radius *= factor;
-    }
-});
+// 2. Hot type — vtable-cmp match, direct inlined call
+#[devirt::devirt]
+impl Shape for Circle {
+    fn area(&self) -> f64 { PI * self.radius * self.radius }
+    fn perimeter(&self) -> f64 { 2.0 * PI * self.radius }
+    fn scale(&mut self, factor: f64) { self.radius *= factor; }
+}
+
+#[devirt::devirt]
+impl Shape for Rect {
+    fn area(&self) -> f64 { self.w * self.h }
+    fn perimeter(&self) -> f64 { 2.0 * (self.w + self.h) }
+    fn scale(&mut self, factor: f64) { self.w *= factor; self.h *= factor; }
+}
 
 // 3. Cold type — falls back to vtable
-devirt::r#impl!(Shape for Triangle {
-    fn area(&self) -> f64 { /* ... */ }
-    fn perimeter(&self) -> f64 { /* ... */ }
-    fn scale(&mut self, factor: f64) { /* ... */ }
-});
+#[devirt::devirt]
+impl Shape for Triangle {
+    fn area(&self) -> f64 {
+        let s = (self.a + self.b + self.c) / 2.0;
+        (s * (s - self.a) * (s - self.b) * (s - self.c)).sqrt()
+    }
+    fn perimeter(&self) -> f64 { self.a + self.b + self.c }
+    fn scale(&mut self, factor: f64) {
+        self.a *= factor; self.b *= factor; self.c *= factor;
+    }
+}
 
 // 4. Use — completely normal dyn Trait
 fn total_area(shapes: &[Box<dyn Shape>]) -> f64 {
     shapes.iter().map(|s| s.area()).sum()
 }
 ```
+
+### Without proc macros
+
+If you prefer zero proc-macro dependencies, disable the default `macros`
+feature:
+
+```toml
+[dependencies]
+devirt = { version = "0.2", default-features = false }
+```
+
+Then use the declarative macro:
+
+```rust
+devirt::devirt! {
+    pub trait Shape [Circle, Rect] {
+        fn area(&self) -> f64;
+        fn perimeter(&self) -> f64;
+        fn scale(&mut self, factor: f64);
+    }
+}
+
+devirt::devirt! {
+    impl Shape for Circle {
+        fn area(&self) -> f64 { PI * self.radius * self.radius }
+        fn perimeter(&self) -> f64 { 2.0 * PI * self.radius }
+        fn scale(&mut self, factor: f64) { self.radius *= factor; }
+    }
+}
+```
+
+Both APIs produce identical expanded code.
 
 ## When to use
 
@@ -91,10 +120,16 @@ objects). Common scenarios:
 
 ## Performance characteristics
 
-| Path               | Cost                                                                                                                                                                                                        |
-| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Hot type dispatch  | Single `cmp` against a RIP-relative vtable address + direct, inlined method call under LTO. **No indirect call.**                                                                                           |
-| Cold type dispatch | Adds ~0.3 ns per hot type over plain vtable dispatch — one `lea + cmp + jne` per hot type before the vtable fallback. Keep the hot list to ≤3 types to keep this overhead below a single cache-miss cycle.  |
+| Path               | Cost                                                                                                                                                                                                       |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Hot type dispatch  | Single `cmp` against a RIP-relative vtable address + direct, inlined method call. **No indirect call.**                                                                                                    |
+| Cold type dispatch | Adds ~0.3 ns per hot type over plain vtable dispatch — one `lea + cmp + jne` per hot type before the vtable fallback. Keep the hot list to ≤3 types to keep this overhead below a single cache-miss cycle. |
+
+LTO is **not required** — all dispatch logic expands via macros into the
+user's crate, so there are no cross-crate function calls to inline and
+vtable deduplication works within a single crate via COMDAT groups. LTO
+may still improve performance for other reasons in your project but is not
+necessary for devirt to work correctly.
 
 ## Benchmarks
 
@@ -140,10 +175,6 @@ pays the full branch misprediction cost on every call.
 
 Notes:
 
-- **LTO is required.** Without it, the trait and the hot type's impl may
-  end up in different codegen units and their vtables may not be
-  deduplicated, so the comparison always misses and dispatch silently
-  degrades to plain vtable.
 - **Keep the hot list to ≤3 types.** Each hot type adds one `cmp + branch`
   to the cold path, and more than three becomes a net loss on
   cold-dominated workloads.
@@ -156,11 +187,7 @@ Notes:
 Run benchmarks yourself:
 
 ```bash
-# With LTO (default)
 cargo bench --bench dispatch
-
-# Without LTO (to stress-test)
-RUSTFLAGS="-C lto=off -C codegen-units=256" cargo bench --bench dispatch
 ```
 
 ## License

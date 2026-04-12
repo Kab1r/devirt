@@ -1,17 +1,17 @@
 error[E0046]: not all trait items implemented, missing: `__spec_second`
-  --> tests/ui/missing_method.rs:10:1
+  --> tests/ui/missing_method.rs:11:1
    |
- 3 | / devirt::r#trait! {
- 4 | |     pub TwoMethods [Foo] {
- 5 | |         fn first(&self) -> i32;
- 6 | |         fn second(&self) -> i32;
- 7 | |     }
- 8 | | }
+ 3 | / devirt::__devirt_define! {
+ 4 | |     @trait []
+ 5 | |     pub TwoMethods [Foo] {
+ 6 | |         fn first(&self) -> i32;
+...  |
+ 9 | | }
    | |_- `__spec_second` from trait
- 9 |
-10 | / devirt::r#impl!(TwoMethods for Foo [hot] {
-11 | |     fn first(&self) -> i32 { 1 }
-12 | | });
+10 |
+11 | / devirt::__devirt_define! { @impl [] TwoMethods for Foo {
+12 | |     fn first(&self) -> i32 { 1 }
+13 | | }}
    | |__^ missing `__spec_second` in implementation
    |
-   = note: this error originates in the macro `$crate::impl` which comes from the expansion of the macro `devirt::impl` (in Nightly builds, run with -Z macro-backtrace for more info)
+   = note: this error originates in the macro `devirt::__devirt_define` (in Nightly builds, run with -Z macro-backtrace for more info)

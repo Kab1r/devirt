@@ -3,17 +3,18 @@ struct Widget {
     y: f64,
 }
 
-devirt::r#trait! {
+devirt::__devirt_define! {
+    @trait []
     pub MultiArg [Widget] {
         fn add(&self, a: f64, b: f64) -> f64;
         fn set(&mut self, a: f64, b: f64);
     }
 }
 
-devirt::r#impl!(MultiArg for Widget [hot] {
+devirt::__devirt_define! { @impl [] MultiArg for Widget {
     fn add(&self, a: f64, b: f64) -> f64 { self.x + a + self.y + b }
     fn set(&mut self, a: f64, b: f64) { self.x = a; self.y = b; }
-});
+}}
 
 fn main() {
     let mut w: Box<dyn MultiArg> = Box::new(Widget { x: 1.0, y: 2.0 });

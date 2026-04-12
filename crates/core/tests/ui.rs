@@ -8,6 +8,8 @@ fn ui() {
     t.pass("tests/ui/all_arms.rs");
     t.pass("tests/ui/multi_arg.rs");
     t.pass("tests/ui/pub_trait.rs");
+    t.pass("tests/ui/unsafe_trait.rs");
+    t.pass("tests/ui/method_attrs.rs");
     t.compile_fail("tests/ui/missing_method.rs");
     t.compile_fail("tests/ui/wrong_signature.rs");
 }
