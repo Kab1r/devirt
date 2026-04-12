@@ -30,9 +30,12 @@
 //! generates:
 //! - `impl __XImpl for ConcreteType { ... }` with the `__spec_*` bodies
 //!
-//! Both the proc-macro attribute and the declarative macro delegate to
-//! `__devirt_define!`, a `#[doc(hidden)]` internal macro that contains
-//! all dispatch expansion logic.
+//! The proc-macro attribute (`#[devirt]`) emits the dispatch code
+//! directly via `quote!`, supporting the full range of method
+//! signatures that `syn` can parse (lifetimes, `unsafe fn`,
+//! supertraits, attributes, `extern "ABI" fn`, etc.).
+//! The declarative macro (`devirt!`) delegates to `__devirt_define!`,
+//! which has more limited syntax support.
 //!
 //! # Usage
 //!
@@ -121,6 +124,14 @@ extern crate kani;
 #[doc(hidden)]
 pub use paste::paste as __paste;
 
+/// Internal dispatch expansion macro.
+///
+/// This macro has **limited syntax support** compared to the
+/// `#[devirt]` proc-macro attribute. It only handles plain
+/// `fn method(&self, arg: Type) -> Ret;` signatures — no `unsafe fn`,
+/// method lifetimes, supertraits, method attributes, `where` clauses,
+/// or `extern "ABI" fn`. For the full feature set, use the proc-macro
+/// attribute (the default with the `macros` feature enabled).
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __devirt_define {
