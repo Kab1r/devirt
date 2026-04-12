@@ -315,7 +315,7 @@ fn rewrite_sig_with_named_args(
                     arg_names.push(pat_ident.ident.clone());
                 }
                 syn::Pat::Wild(_) => {
-                    let generated = format_ident!("__arg{idx}");
+                    let generated = format_ident!("__devirt_arg{idx}");
                     *pat_type.pat = syn::Pat::Ident(syn::PatIdent {
                         attrs: vec![],
                         by_ref: None,
@@ -328,7 +328,7 @@ fn rewrite_sig_with_named_args(
                 _ => {
                     // Validation already rejects this case, but
                     // generate a name defensively.
-                    arg_names.push(format_ident!("__arg{idx}"));
+                    arg_names.push(format_ident!("__devirt_arg{idx}"));
                 }
             }
         }
