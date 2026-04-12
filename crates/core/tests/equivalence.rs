@@ -95,6 +95,75 @@ fn decl_dispatch() {
     assert_eq!(c.val, 100);
 }
 
+// ── Extended proc-macro tests: supertraits, method lifetimes, #[must_use] ──
+
+#[cfg(feature = "macros")]
+mod attr_extended {
+    use core::fmt;
+
+    #[derive(Debug)]
+    pub struct ExtHot {
+        pub val: u64,
+        pub label: String,
+    }
+
+    #[derive(Debug)]
+    pub struct ExtCold {
+        pub val: u64,
+        pub label: String,
+    }
+
+    #[devirt::devirt(ExtHot)]
+    pub trait Inspectable: fmt::Debug {
+        #[must_use]
+        fn value(&self) -> u64;
+        // Explicit lifetime to exercise method-lifetime support.
+        fn name<'a>(&'a self) -> &'a str;
+        fn set_val(&mut self, v: u64);
+    }
+
+    #[devirt::devirt]
+    impl Inspectable for ExtHot {
+        fn value(&self) -> u64 { self.val }
+        fn name(&self) -> &str { &self.label }
+        fn set_val(&mut self, v: u64) { self.val = v; }
+    }
+
+    #[devirt::devirt]
+    impl Inspectable for ExtCold {
+        fn value(&self) -> u64 { self.val + 1 }
+        fn name(&self) -> &str { &self.label }
+        fn set_val(&mut self, v: u64) { self.val = v + 1; }
+    }
+}
+
+#[cfg(feature = "macros")]
+#[test]
+fn attr_extended_dispatch() {
+    use attr_extended::{ExtCold, ExtHot, Inspectable};
+
+    // Supertraits: dyn Inspectable implements Debug
+    let h = ExtHot { val: 42, label: "hot".into() };
+    let c = ExtCold { val: 42, label: "cold".into() };
+    drop(format!("{:?}", &h as &dyn Inspectable));
+
+    // #[must_use] + non-void &self
+    assert_eq!((&h as &dyn Inspectable).value(), 42);
+    assert_eq!((&c as &dyn Inspectable).value(), 43);
+
+    // Method lifetimes
+    assert_eq!((&h as &dyn Inspectable).name(), "hot");
+    assert_eq!((&c as &dyn Inspectable).name(), "cold");
+
+    // &mut self
+    let mut h = ExtHot { val: 0, label: "hot".into() };
+    let mut c = ExtCold { val: 0, label: "cold".into() };
+    (&mut h as &mut dyn Inspectable).set_val(10);
+    (&mut c as &mut dyn Inspectable).set_val(10);
+    assert_eq!(h.val, 10);
+    assert_eq!(c.val, 11);
+}
+
 #[cfg(feature = "macros")]
 #[test]
 fn attr_dispatch() {

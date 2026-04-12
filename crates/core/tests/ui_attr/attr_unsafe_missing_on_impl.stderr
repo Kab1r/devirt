@@ -1,0 +1,12 @@
+error[E0200]: the trait `__TrustedImpl` requires an `unsafe impl` declaration
+  --> tests/ui_attr/attr_unsafe_missing_on_impl.rs:11:1
+   |
+11 | #[devirt::devirt]
+   | ^^^^^^^^^^^^^^^^^
+   |
+   = note: the trait `__TrustedImpl` enforces invariants that the compiler can't check. Review the trait documentation and make sure this implementation upholds those invariants before adding the `unsafe` keyword
+   = note: this error originates in the attribute macro `devirt::devirt` (in Nightly builds, run with -Z macro-backtrace for more info)
+help: add `unsafe` to this trait implementation
+   |
+11 | unsafe #[devirt::devirt]
+   | ++++++
