@@ -144,6 +144,67 @@ fn attr_auto_trait_dispatch() {
     assert_eq!(boxed.get(), 7);
 }
 
+// ── Default method bodies ──────────────────────────────────────────────────
+
+#[cfg(feature = "macros")]
+mod attr_defaults {
+    pub struct DefHot {
+        pub val: u64,
+    }
+
+    pub struct DefCold {
+        pub val: u64,
+    }
+
+    #[devirt::devirt(DefHot)]
+    pub trait Defaulted {
+        fn get(&self) -> u64;
+        fn is_big(&self) -> bool {
+            self.get() > 100
+        }
+    }
+
+    #[devirt::devirt]
+    impl Defaulted for DefHot {
+        fn get(&self) -> u64 {
+            self.val
+        }
+    }
+
+    #[devirt::devirt]
+    impl Defaulted for DefCold {
+        fn get(&self) -> u64 {
+            self.val + 1
+        }
+    }
+}
+
+#[cfg(feature = "macros")]
+#[test]
+fn attr_default_body_dispatch() {
+    use attr_defaults::{DefCold, DefHot, Defaulted};
+
+    // Hot type via &dyn Trait
+    let h = DefHot { val: 200 };
+    assert!((&h as &dyn Defaulted).is_big());
+    let h2 = DefHot { val: 50 };
+    assert!(!(&h2 as &dyn Defaulted).is_big());
+
+    // Cold type via &dyn Trait
+    let c = DefCold { val: 200 };
+    assert!((&c as &dyn Defaulted).is_big());
+
+    // Via &(dyn Trait + Send)
+    let h3 = DefHot { val: 200 };
+    assert!((&h3 as &(dyn Defaulted + Send)).is_big());
+    let c2 = DefCold { val: 50 };
+    assert!(!(&c2 as &(dyn Defaulted + Send)).is_big());
+
+    // Via &(dyn Trait + Send + Sync)
+    let h4 = DefHot { val: 200 };
+    assert!((&h4 as &(dyn Defaulted + Send + Sync)).is_big());
+}
+
 // ── Extended proc-macro tests: supertraits, method lifetimes, #[must_use] ──
 
 #[cfg(feature = "macros")]
