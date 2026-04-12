@@ -57,6 +57,63 @@ fn expand_trait(attr: TokenStream, trait_item: &syn::ItemTrait) -> TokenStream {
         .into();
     }
 
+    // Reject unsupported trait features.
+    if !trait_item.generics.params.is_empty() {
+        return syn::Error::new_spanned(
+            &trait_item.generics,
+            "#[devirt] does not support generic traits",
+        )
+        .to_compile_error()
+        .into();
+    }
+    if let Some(where_clause) = &trait_item.generics.where_clause {
+        return syn::Error::new_spanned(
+            where_clause,
+            "#[devirt] does not support where clauses on traits",
+        )
+        .to_compile_error()
+        .into();
+    }
+    if !trait_item.supertraits.is_empty() {
+        return syn::Error::new_spanned(
+            &trait_item.supertraits,
+            "#[devirt] does not support supertraits",
+        )
+        .to_compile_error()
+        .into();
+    }
+    for item in &trait_item.items {
+        match item {
+            syn::TraitItem::Type(t) => {
+                return syn::Error::new_spanned(
+                    t,
+                    "#[devirt] does not support associated types",
+                )
+                .to_compile_error()
+                .into();
+            }
+            syn::TraitItem::Const(c) => {
+                return syn::Error::new_spanned(
+                    c,
+                    "#[devirt] does not support associated constants",
+                )
+                .to_compile_error()
+                .into();
+            }
+            syn::TraitItem::Fn(f) => {
+                if f.default.is_some() {
+                    return syn::Error::new_spanned(
+                        f,
+                        "#[devirt] does not support default method bodies",
+                    )
+                    .to_compile_error()
+                    .into();
+                }
+            }
+            _ => {}
+        }
+    }
+
     let hot_types: Vec<syn::Type> =
         parse_macro_input!(attr with Punctuated::<syn::Type, Token![,]>::parse_terminated)
             .into_iter()
@@ -114,28 +171,43 @@ fn expand_impl(attr: &TokenStream, impl_item: &syn::ItemImpl) -> TokenStream {
         .into();
     };
 
+    // Reject unsupported impl features.
+    if !impl_item.generics.params.is_empty() {
+        return syn::Error::new_spanned(
+            &impl_item.generics,
+            "#[devirt] does not support generic impl blocks",
+        )
+        .to_compile_error()
+        .into();
+    }
+    if let Some(where_clause) = &impl_item.generics.where_clause {
+        return syn::Error::new_spanned(
+            where_clause,
+            "#[devirt] does not support where clauses on impl blocks",
+        )
+        .to_compile_error()
+        .into();
+    }
+
     let trait_name = &trait_path.segments.last().expect("trait path is empty").ident;
     let ty = &impl_item.self_ty;
 
-    let method_bodies: Vec<_> = impl_item
-        .items
-        .iter()
-        .filter_map(|item| {
-            if let syn::ImplItem::Fn(m) = item {
-                let sig = &m.sig;
-                let block = &m.block;
-                Some(quote! { #sig #block })
-            } else {
-                None
+    let mut method_bodies = proc_macro2::TokenStream::new();
+    for item in &impl_item.items {
+        if let syn::ImplItem::Fn(m) = item {
+            for a in &m.attrs {
+                a.to_tokens(&mut method_bodies);
             }
-        })
-        .collect();
+            m.sig.to_tokens(&mut method_bodies);
+            m.block.to_tokens(&mut method_bodies);
+        }
+    }
 
     quote! {
         ::devirt::__devirt_define! {
             @impl
             #trait_name for #ty {
-                #(#method_bodies)*
+                #method_bodies
             }
         }
     }

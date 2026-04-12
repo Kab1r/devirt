@@ -50,7 +50,7 @@
 //!
 //! // With declarative macro (default-features = false):
 //! devirt::devirt! {
-//!     pub MyTrait [HotType1, HotType2] {
+//!     pub trait MyTrait [HotType1, HotType2] {
 //!         fn method(&self) -> ReturnType;
 //!     }
 //! }
