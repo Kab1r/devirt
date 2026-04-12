@@ -18,7 +18,7 @@ devirt = { path = "crates/core" }
 syn = { version = "2", features = ["full"] }
 quote = "1"
 proc-macro2 = "1"
-vstd = { version = "=0.0.0-2026-04-05-0114", default-features = false }
+vstd = { version = "=0.0.0-2026-04-12-0118", default-features = false }
 
 [profile.bench]
 lto = "thin"
