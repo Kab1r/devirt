@@ -15,7 +15,7 @@ trybuild = "1"
 libfuzzer-sys = "0.4"
 arbitrary = { version = "1", features = ["derive"] }
 devirt = { path = "crates/core" }
-vstd = { version = "=0.0.0-2026-04-05-0114", default-features = false }
+vstd = { version = "=0.0.0-2026-04-12-0118", default-features = false }
 
 [profile.bench]
 lto = "thin"
