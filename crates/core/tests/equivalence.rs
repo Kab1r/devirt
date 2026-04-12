@@ -95,6 +95,55 @@ fn decl_dispatch() {
     assert_eq!(c.val, 100);
 }
 
+// ── Auto-trait dispatch: dyn Trait + Send / Sync / Send + Sync ──────────────
+
+#[cfg(feature = "macros")]
+#[test]
+fn attr_auto_trait_dispatch() {
+    // Verify that dispatch through &(dyn T + Send), &(dyn T + Sync),
+    // and &(dyn T + Send + Sync) produces the same results as &dyn T
+    // for both hot and cold types.
+
+    // --- &self, non-void (hot) ---
+    let h = Hot { val: 42 };
+    let base = (&h as &dyn attr::T).get();
+    assert_eq!((&h as &(dyn attr::T + Send)).get(), base);
+    assert_eq!((&h as &(dyn attr::T + Sync)).get(), base);
+    assert_eq!((&h as &(dyn attr::T + Send + Sync)).get(), base);
+
+    // --- &self, non-void (cold) ---
+    let c = Cold { val: 42 };
+    let base = (&c as &dyn attr::T).get();
+    assert_eq!((&c as &(dyn attr::T + Send)).get(), base);
+    assert_eq!((&c as &(dyn attr::T + Sync)).get(), base);
+    assert_eq!((&c as &(dyn attr::T + Send + Sync)).get(), base);
+
+    // --- &self, void ---
+    (&h as &(dyn attr::T + Send)).notify(1);
+    (&h as &(dyn attr::T + Sync)).notify(1);
+    (&h as &(dyn attr::T + Send + Sync)).notify(1);
+
+    // --- &mut self, non-void (hot) ---
+    let mut h1 = Hot { val: 10 };
+    let mut h2 = Hot { val: 10 };
+    let expected = (&mut h1 as &mut dyn attr::T).transform(5);
+    assert_eq!(
+        (&mut h2 as &mut (dyn attr::T + Send)).transform(5),
+        expected,
+    );
+
+    // --- &mut self, void (hot) ---
+    let mut h3 = Hot { val: 10 };
+    let mut h4 = Hot { val: 10 };
+    (&mut h3 as &mut dyn attr::T).reset(99);
+    (&mut h4 as &mut (dyn attr::T + Send)).reset(99);
+    assert_eq!(h3.val, h4.val);
+
+    // --- Box<dyn T + Send> ---
+    let boxed: Box<dyn attr::T + Send> = Box::new(Hot { val: 7 });
+    assert_eq!(boxed.get(), 7);
+}
+
 // ── Extended proc-macro tests: supertraits, method lifetimes, #[must_use] ──
 
 #[cfg(feature = "macros")]
