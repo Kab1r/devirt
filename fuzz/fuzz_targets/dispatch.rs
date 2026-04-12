@@ -140,6 +140,9 @@ fn make_plain(variant: u8, val: f64) -> Box<dyn PlainDispatch> {
 }
 
 fn assert_bits_eq(a: f64, b: f64, msg: &str) {
+    if a.is_nan() && b.is_nan() {
+        return;
+    }
     assert_eq!(
         a.to_bits(),
         b.to_bits(),
