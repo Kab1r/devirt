@@ -77,6 +77,7 @@ use core::any::{Any, TypeId};
 /// [cs-reg]: crate::callsite#registering-callsites
 /// [`event`]: Subscriber::event
 /// [`event_enabled`]: Subscriber::event_enabled
+#[cfg_attr(feature = "devirt-bench", devirt::devirt(crate::bench_subscriber::BenchSubscriber))]
 pub trait Subscriber: 'static {
     /// Invoked when this subscriber becomes a [`Dispatch`].
     ///
@@ -671,6 +672,7 @@ impl Interest {
 #[derive(Copy, Clone, Debug, Default)]
 pub struct NoSubscriber(());
 
+#[cfg_attr(feature = "devirt-bench", devirt::devirt)]
 impl Subscriber for NoSubscriber {
     #[inline]
     fn register_callsite(&self, _: &'static Metadata<'static>) -> Interest {
@@ -704,6 +706,7 @@ impl NoSubscriber {
     }
 }
 
+#[cfg(not(feature = "devirt-bench"))]
 impl<S> Subscriber for Box<S>
 where
     S: Subscriber + ?Sized,
@@ -789,6 +792,7 @@ where
     }
 }
 
+#[cfg(not(feature = "devirt-bench"))]
 impl<S> Subscriber for Arc<S>
 where
     S: Subscriber + ?Sized,

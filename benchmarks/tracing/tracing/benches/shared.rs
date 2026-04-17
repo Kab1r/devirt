@@ -89,6 +89,7 @@ impl field::Visit for Visitor<'_> {
     }
 }
 
+#[cfg_attr(feature = "devirt-bench", devirt::devirt)]
 impl tracing::Subscriber for VisitingSubscriber {
     fn new_span(&self, span: &span::Attributes<'_>) -> Id {
         let mut visitor = Visitor(self.0.lock().unwrap());
@@ -127,6 +128,7 @@ impl tracing::Subscriber for VisitingSubscriber {
 /// A subscriber that is enabled but otherwise does nothing.
 struct EnabledSubscriber;
 
+#[cfg_attr(feature = "devirt-bench", devirt::devirt)]
 impl tracing::Subscriber for EnabledSubscriber {
     fn new_span(&self, span: &span::Attributes<'_>) -> Id {
         let _ = span;

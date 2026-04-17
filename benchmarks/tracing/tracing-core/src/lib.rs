@@ -286,6 +286,7 @@ pub mod metadata;
 mod parent;
 pub mod span;
 pub mod subscriber;
+pub mod bench_subscriber;
 #[cfg(not(feature = "std"))]
 mod sync;
 

@@ -34,7 +34,8 @@ pin-project-lite = "0.2.9"
 criterion = { version = "0.3.6", default-features = false }
 futures = { version = "0.3.21", default-features = false }
 log = "0.4.17"
-tracing-mock = { path = "../tracing-mock" }
+# tracing-mock removed for devirt benchmarking (not used by benches)
+devirt = { path = "../../../crates/core" }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = "0.3.38"
@@ -60,6 +61,7 @@ release_max_level_trace = []
 async-await = []
 
 std = ["tracing-core/std"]
+devirt-bench = ["tracing-core/devirt-bench"]
 log-always = ["log"]
 attributes = ["tracing-attributes"]
 valuable = ["tracing-core/valuable"]
@@ -98,6 +100,10 @@ harness = false
 
 [[bench]]
 name = "span_repeated"
+harness = false
+
+[[bench]]
+name = "devirt_event"
 harness = false
 
 [badges]
