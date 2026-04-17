@@ -206,27 +206,124 @@ fn build_trait_dyn_ref(
     }
 }
 
-fn build_assert_ty(
-    name: &syn::Ident,
-    trait_generic_params: &Punctuated<syn::GenericParam, Token![,]>,
-    assoc_type_idents: &[syn::Ident],
+fn build_fat_ptr_assertion(
+    trait_item: &syn::ItemTrait,
 ) -> proc_macro2::TokenStream {
-    let mut args: Vec<proc_macro2::TokenStream> = Vec::new();
-    for param in trait_generic_params {
+    let name = &trait_item.ident;
+    let params = &trait_item.generics.params;
+
+    let assoc_types: Vec<&syn::TraitItemType> = trait_item
+        .items
+        .iter()
+        .filter_map(|item| {
+            if let syn::TraitItem::Type(t) = item {
+                Some(t)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    if params.is_empty() && assoc_types.is_empty() {
+        return quote! {
+            const _: () = assert!(
+                ::core::mem::size_of::<*const dyn #name>()
+                    == 2 * ::core::mem::size_of::<usize>()
+            );
+        };
+    }
+
+    let mut fn_params: Vec<proc_macro2::TokenStream> = Vec::new();
+    let mut dyn_args: Vec<proc_macro2::TokenStream> = Vec::new();
+
+    for param in params {
+        fn_params.push(strip_param_defaults(param));
         match param {
-            syn::GenericParam::Type(_) => args.push(quote! { () }),
-            syn::GenericParam::Lifetime(_) => args.push(quote! { 'static }),
-            syn::GenericParam::Const(_) => args.push(quote! { { 0 } }),
+            syn::GenericParam::Type(t) => {
+                let id = &t.ident;
+                dyn_args.push(quote! { #id });
+            }
+            syn::GenericParam::Lifetime(l) => {
+                let lt = &l.lifetime;
+                dyn_args.push(quote! { #lt });
+            }
+            syn::GenericParam::Const(c) => {
+                let id = &c.ident;
+                dyn_args.push(quote! { #id });
+            }
         }
     }
-    for id in assoc_type_idents {
-        args.push(quote! { #id = () });
+
+    for assoc in &assoc_types {
+        let id = &assoc.ident;
+        let assoc_param = format_ident!("__Assoc{}", id);
+        let bounds = &assoc.bounds;
+        if bounds.is_empty() {
+            fn_params.push(quote! { #assoc_param });
+        } else {
+            fn_params.push(quote! { #assoc_param: #bounds });
+        }
+        dyn_args.push(quote! { #id = #assoc_param });
     }
-    if args.is_empty() {
-        quote! { *const dyn #name }
+
+    let where_preds: Vec<_> = trait_item
+        .generics
+        .where_clause
+        .as_ref()
+        .map(|wc| {
+            wc.predicates
+                .iter()
+                .filter(|pred| !predicate_references_self(pred))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    let where_clause = if where_preds.is_empty() {
+        quote! {}
     } else {
-        quote! { *const dyn #name<#(#args),*> }
+        quote! { where #(#where_preds),* }
+    };
+
+    quote! {
+        const _: () = {
+            fn __devirt_assert<#(#fn_params),*>() #where_clause {
+                assert!(
+                    ::core::mem::size_of::<*const dyn #name<#(#dyn_args),*>>()
+                        == 2 * ::core::mem::size_of::<usize>()
+                );
+            }
+        };
     }
+}
+
+fn strip_param_defaults(param: &syn::GenericParam) -> proc_macro2::TokenStream {
+    match param {
+        syn::GenericParam::Type(t) => {
+            let id = &t.ident;
+            let bounds = &t.bounds;
+            if bounds.is_empty() {
+                quote! { #id }
+            } else {
+                quote! { #id: #bounds }
+            }
+        }
+        syn::GenericParam::Lifetime(l) => quote! { #l },
+        syn::GenericParam::Const(c) => {
+            let id = &c.ident;
+            let ty = &c.ty;
+            quote! { const #id: #ty }
+        }
+    }
+}
+
+fn predicate_references_self(pred: &syn::WherePredicate) -> bool {
+    if let syn::WherePredicate::Type(pt) = pred
+        && let syn::Type::Path(tp) = &pt.bounded_ty
+        && let Some(first) = tp.path.segments.first()
+    {
+        return first.ident == "Self";
+    }
+    false
 }
 
 fn build_vtable_helpers(
@@ -413,7 +510,7 @@ fn emit_trait_expansion(
         quote! {}
     };
 
-    let assert_ty = build_assert_ty(name, trait_generic_params, &assoc_info.idents);
+    let fat_ptr_assertion = build_fat_ptr_assertion(trait_item);
     let vtable_helpers = build_vtable_helpers(
         can_devirt, name, &inner_name, &inherent_impl_generics,
         &trait_dyn_ref, &assoc_info.idents,
@@ -430,10 +527,7 @@ fn emit_trait_expansion(
             #inner_supers #trait_where_clause
         { #(#assoc_type_decls)* #(#spec_decls)* }
 
-        const _: () = assert!(
-            ::core::mem::size_of::<#assert_ty>()
-                == 2 * ::core::mem::size_of::<usize>()
-        );
+        #fat_ptr_assertion
 
         #vtable_helpers
 
@@ -600,7 +694,16 @@ impl VisitMut for RewriteSelfAssocTypes {
         {
             let name = i.segments[1].ident.to_string();
             if let Some(replacement) = self.rewrites.get(&name) {
-                *i = replacement.clone().into();
+                let remaining: Vec<syn::PathSegment> =
+                    i.segments.iter().skip(2).cloned().collect();
+                let mut first = syn::PathSegment::from(replacement.clone());
+                first.arguments = i.segments[1].arguments.clone();
+                let mut new_segments = Punctuated::new();
+                new_segments.push(first);
+                for seg in remaining {
+                    new_segments.push(seg);
+                }
+                i.segments = new_segments;
             }
         }
     }
