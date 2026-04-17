@@ -253,6 +253,150 @@ fn attr_default_body_dispatch() {
     assert_eq!((&h5 as &dyn Defaulted).describe(), "val=7");
 }
 
+// ── Where clauses on traits ────────────────────────────────────────────────
+
+#[cfg(feature = "macros")]
+mod attr_where_clause {
+    use core::fmt::Debug;
+
+    #[derive(Debug)]
+    pub struct WcHot {
+        pub val: u64,
+    }
+
+    #[derive(Debug)]
+    pub struct WcCold {
+        pub val: u64,
+    }
+
+    // Uses `where Self: Debug` (semantically equivalent to a supertrait).
+    #[devirt::devirt(WcHot)]
+    pub trait Inspectable
+    where
+        Self: Debug,
+    {
+        fn value(&self) -> u64;
+        fn inspect(&self) -> String {
+            format!("{:?}={}", self, self.value())
+        }
+    }
+
+    #[devirt::devirt]
+    impl Inspectable for WcHot {
+        fn value(&self) -> u64 {
+            self.val
+        }
+    }
+
+    #[devirt::devirt]
+    impl Inspectable for WcCold {
+        fn value(&self) -> u64 {
+            self.val + 1
+        }
+    }
+}
+
+#[cfg(feature = "macros")]
+#[test]
+fn attr_where_clause_dispatch() {
+    use attr_where_clause::{Inspectable, WcCold, WcHot};
+
+    let h = WcHot { val: 42 };
+    assert_eq!((&h as &dyn Inspectable).value(), 42);
+    assert!((&h as &dyn Inspectable).inspect().contains("42"));
+
+    let c = WcCold { val: 10 };
+    assert_eq!((&c as &dyn Inspectable).value(), 11);
+    assert!((&c as &dyn Inspectable).inspect().contains("11"));
+}
+
+// ── Generic impl blocks ────────────────────────────────────────────────────
+
+#[cfg(feature = "macros")]
+mod attr_generic_impl {
+    pub struct GHot {
+        pub val: u64,
+    }
+
+    #[devirt::devirt(GHot)]
+    pub trait Scale {
+        fn area(&self) -> u64;
+    }
+
+    #[devirt::devirt]
+    impl Scale for GHot {
+        fn area(&self) -> u64 {
+            self.val
+        }
+    }
+
+    pub struct Scaled<T> {
+        pub inner: T,
+        pub factor: u64,
+    }
+
+    // Generic impl — always cold. Delegates to inner through &dyn Scale.
+    #[devirt::devirt]
+    impl<T: Scale> Scale for Scaled<T> {
+        fn area(&self) -> u64 {
+            self.factor * (&self.inner as &dyn Scale).area()
+        }
+    }
+
+    // Generic impl with where clause.
+    pub struct Pair<A, B>
+    where
+        A: Scale,
+        B: Scale,
+    {
+        pub a: A,
+        pub b: B,
+    }
+
+    #[devirt::devirt]
+    impl<A, B> Scale for Pair<A, B>
+    where
+        A: Scale,
+        B: Scale,
+    {
+        fn area(&self) -> u64 {
+            (&self.a as &dyn Scale).area() + (&self.b as &dyn Scale).area()
+        }
+    }
+}
+
+#[cfg(feature = "macros")]
+#[test]
+fn attr_generic_impl_dispatch() {
+    use attr_generic_impl::{GHot, Pair, Scale, Scaled};
+
+    // Hot
+    let h = GHot { val: 10 };
+    assert_eq!((&h as &dyn Scale).area(), 10);
+
+    // Scaled<GHot> — cold outer, hot inner
+    let s = Scaled { inner: GHot { val: 5 }, factor: 3 };
+    assert_eq!((&s as &dyn Scale).area(), 15);
+
+    // Scaled<Scaled<GHot>> — nested generic
+    let ss = Scaled {
+        inner: Scaled { inner: GHot { val: 2 }, factor: 4 },
+        factor: 5,
+    };
+    assert_eq!((&ss as &dyn Scale).area(), 40);
+
+    // Pair with where clause
+    let p = Pair {
+        a: GHot { val: 3 },
+        b: Scaled { inner: GHot { val: 2 }, factor: 4 },
+    };
+    assert_eq!((&p as &dyn Scale).area(), 3 + 8);
+
+    // Via auto-trait flavors
+    assert_eq!((&s as &(dyn Scale + Send)).area(), 15);
+    assert_eq!((&s as &(dyn Scale + Send + Sync)).area(), 15);
+}
+
 // ── Extended proc-macro tests: supertraits, method lifetimes, #[must_use] ──
 
 #[cfg(feature = "macros")]

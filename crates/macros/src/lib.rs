@@ -82,24 +82,20 @@ fn validate_trait(trait_item: &syn::ItemTrait) -> Result<(), syn::Error> {
             "#[devirt] does not support generic traits",
         ));
     }
-    if let Some(wc) = &trait_item.generics.where_clause {
-        return Err(syn::Error::new_spanned(
-            wc,
-            "#[devirt] does not support where clauses on traits",
-        ));
-    }
     for item in &trait_item.items {
         match item {
             syn::TraitItem::Type(t) => {
                 return Err(syn::Error::new_spanned(
                     t,
-                    "#[devirt] does not support associated types",
+                    "#[devirt] does not yet support associated types — \
+                     they require type parameterization of the dispatch shim",
                 ));
             }
             syn::TraitItem::Const(c) => {
                 return Err(syn::Error::new_spanned(
                     c,
-                    "#[devirt] does not support associated constants",
+                    "#[devirt] does not support associated constants — \
+                     they make a trait not dyn-compatible",
                 ));
             }
             syn::TraitItem::Fn(f) => validate_trait_method(f)?,
@@ -159,6 +155,7 @@ fn emit_trait_expansion(
     let name = &trait_item.ident;
     let outer_attrs = &trait_item.attrs;
     let supertraits = &trait_item.supertraits;
+    let where_clause = &trait_item.generics.where_clause;
     let inner_name = format_ident!("__{name}Impl");
 
     // __spec_* method declarations for the inner trait (with default
@@ -210,7 +207,7 @@ fn emit_trait_expansion(
     quote! {
         // (1) Hidden inner trait — carries __spec_* methods.
         #[doc(hidden)]
-        #vis #unsafety trait #inner_name #inner_supers {
+        #vis #unsafety trait #inner_name #inner_supers #where_clause {
             #(#spec_decls)*
         }
 
@@ -274,11 +271,11 @@ fn emit_trait_expansion(
 
         // (5) Public marker trait.
         #(#outer_attrs)*
-        #vis #unsafety trait #name: #public_supers {}
+        #vis #unsafety trait #name: #public_supers #where_clause {}
 
         // (6) Blanket impl.
         #unsafety impl<__DevirtT: #inner_name + ?Sized> #name
-            for __DevirtT {}
+            for __DevirtT #where_clause {}
     }
     .into()
 }
@@ -563,23 +560,6 @@ fn expand_impl(attr: &TokenStream, impl_item: &syn::ItemImpl) -> TokenStream {
         .into();
     };
 
-    if !impl_item.generics.params.is_empty() {
-        return syn::Error::new_spanned(
-            &impl_item.generics,
-            "#[devirt] does not support generic impl blocks",
-        )
-        .to_compile_error()
-        .into();
-    }
-    if let Some(wc) = &impl_item.generics.where_clause {
-        return syn::Error::new_spanned(
-            wc,
-            "#[devirt] does not support where clauses on impl blocks",
-        )
-        .to_compile_error()
-        .into();
-    }
-
     // Reject qualified paths — we need a plain ident to construct
     // the __TraitNameImpl identifier.
     if trait_path.leading_colon.is_some() || trait_path.segments.len() > 1 {
@@ -600,6 +580,8 @@ fn expand_impl(attr: &TokenStream, impl_item: &syn::ItemImpl) -> TokenStream {
         .ident;
     let inner_name = format_ident!("__{trait_name}Impl");
     let ty = &impl_item.self_ty;
+    let (impl_generics, _, where_clause) =
+        impl_item.generics.split_for_impl();
 
     // Collect method names so sibling calls in impl bodies
     // (e.g. `self.area()`) are rewritten to `self.__spec_area()`.
@@ -640,7 +622,7 @@ fn expand_impl(attr: &TokenStream, impl_item: &syn::ItemImpl) -> TokenStream {
         .collect();
 
     quote! {
-        #unsafety impl #inner_name for #ty {
+        #unsafety impl #impl_generics #inner_name for #ty #where_clause {
             #(#spec_methods)*
         }
     }
