@@ -491,3 +491,107 @@ fn attr_dispatch() {
     assert_eq!(h.val, 99);
     assert_eq!(c.val, 100);
 }
+
+// ── Associated types ──────────────────────────────────────────────────────
+
+#[cfg(feature = "macros")]
+mod attr_assoc_types {
+    pub struct Circle;
+    pub struct Rect;
+
+    #[devirt::devirt(Circle)]
+    pub trait Drawable {
+        type Color;
+        fn name(&self) -> &str;
+        fn draw(&self, color: Self::Color) -> String;
+    }
+
+    #[devirt::devirt]
+    impl Drawable for Circle {
+        type Color = String;
+        fn name(&self) -> &str { "circle" }
+        fn draw(&self, color: String) -> String { format!("circle: {color}") }
+    }
+
+    #[devirt::devirt]
+    impl Drawable for Rect {
+        type Color = u32;
+        fn name(&self) -> &str { "rect" }
+        fn draw(&self, color: u32) -> String { format!("rect: #{color:06x}") }
+    }
+}
+
+#[cfg(feature = "macros")]
+#[test]
+fn attr_assoc_type_dispatch() {
+    use attr_assoc_types::{Circle, Drawable, Rect};
+
+    let c = Circle;
+    assert_eq!((&c as &dyn Drawable<Color = String>).name(), "circle");
+    assert_eq!(
+        (&c as &dyn Drawable<Color = String>).draw("red".into()),
+        "circle: red"
+    );
+    assert_eq!(
+        (&c as &(dyn Drawable<Color = String> + Send)).name(),
+        "circle"
+    );
+    assert_eq!(
+        (&c as &(dyn Drawable<Color = String> + Send + Sync)).name(),
+        "circle"
+    );
+
+    let r = Rect;
+    let d: &dyn Drawable<Color = u32> = &r;
+    assert_eq!(d.name(), "rect");
+    assert_eq!(d.draw(0x00FF_0000_u32), "rect: #ff0000");
+}
+
+// ── Generic trait parameters ──────────────────────────────────────────────
+
+#[cfg(feature = "macros")]
+mod attr_generic_trait {
+    pub struct Handler;
+
+    #[devirt::devirt(Handler)]
+    pub trait Processor<T> {
+        fn process(&self, input: T) -> String;
+        fn name(&self) -> &str;
+    }
+
+    #[devirt::devirt]
+    impl Processor<String> for Handler {
+        fn process(&self, input: String) -> String { format!("str: {input}") }
+        fn name(&self) -> &str { "handler" }
+    }
+
+    #[devirt::devirt]
+    impl Processor<u32> for Handler {
+        fn process(&self, input: u32) -> String { format!("num: {input}") }
+        fn name(&self) -> &str { "handler" }
+    }
+}
+
+#[cfg(feature = "macros")]
+#[test]
+fn attr_generic_trait_dispatch() {
+    use attr_generic_trait::{Handler, Processor};
+
+    let h = Handler;
+    assert_eq!(
+        (&h as &dyn Processor<String>).process("hello".into()),
+        "str: hello"
+    );
+    assert_eq!(
+        (&h as &dyn Processor<u32>).process(42),
+        "num: 42"
+    );
+    assert_eq!(
+        (&h as &(dyn Processor<String> + Send)).name(),
+        "handler"
+    );
+    assert_eq!(
+        (&h as &(dyn Processor<u32> + Send + Sync)).name(),
+        "handler"
+    );
+}

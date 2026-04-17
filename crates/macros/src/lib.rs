@@ -5,11 +5,12 @@
 //! is an implementation detail of `devirt` and should not be used
 //! directly.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use syn::punctuated::Punctuated;
+use syn::visit::Visit;
 use syn::visit_mut::VisitMut;
 use syn::{Token, parse_macro_input};
 
@@ -76,21 +77,8 @@ fn expand_trait(attr: TokenStream, trait_item: &syn::ItemTrait) -> TokenStream {
 }
 
 fn validate_trait(trait_item: &syn::ItemTrait) -> Result<(), syn::Error> {
-    if !trait_item.generics.params.is_empty() {
-        return Err(syn::Error::new_spanned(
-            &trait_item.generics,
-            "#[devirt] does not support generic traits",
-        ));
-    }
     for item in &trait_item.items {
         match item {
-            syn::TraitItem::Type(t) => {
-                return Err(syn::Error::new_spanned(
-                    t,
-                    "#[devirt] does not yet support associated types — \
-                     they require type parameterization of the dispatch shim",
-                ));
-            }
             syn::TraitItem::Const(c) => {
                 return Err(syn::Error::new_spanned(
                     c,
@@ -146,89 +134,132 @@ fn validate_trait_method(f: &syn::TraitItemFn) -> Result<(), syn::Error> {
     Ok(())
 }
 
-fn emit_trait_expansion(
-    trait_item: &syn::ItemTrait,
-    hot_types: &[syn::Type],
-) -> TokenStream {
-    let unsafety = &trait_item.unsafety;
-    let vis = &trait_item.vis;
-    let name = &trait_item.ident;
-    let outer_attrs = &trait_item.attrs;
-    let supertraits = &trait_item.supertraits;
-    let where_clause = &trait_item.generics.where_clause;
-    let inner_name = format_ident!("__{name}Impl");
+struct AssocTypeInfo {
+    names: HashSet<String>,
+    idents: Vec<syn::Ident>,
+    generics: Vec<syn::Ident>,
+    decls: Vec<proc_macro2::TokenStream>,
+    rewrites: HashMap<String, syn::Ident>,
+}
 
-    // __spec_* method declarations for the inner trait (with default
-    // bodies rewritten so `self.method()` → `self.__spec_method()`).
-    let spec_decls = generate_spec_decls(trait_item);
-
-    // Dispatch methods for the inherent impl on `dyn Trait`.
-    let dispatch_methods: Vec<_> = trait_item
+fn collect_assoc_types(trait_item: &syn::ItemTrait) -> AssocTypeInfo {
+    let items: Vec<&syn::TraitItemType> = trait_item
         .items
         .iter()
         .filter_map(|item| {
-            let syn::TraitItem::Fn(m) = item else {
-                return None;
-            };
-            Some(generate_dispatch_method(m, name, &inner_name, hot_types))
+            if let syn::TraitItem::Type(t) = item {
+                Some(t)
+            } else {
+                None
+            }
         })
         .collect();
-
-    // Delegating methods for auto-trait inherent impls (Send, Sync,
-    // Send + Sync).  Each method coerces `self` to the base `dyn Trait`
-    // and calls the dispatch method.
-    let delegating_methods: Vec<_> = trait_item
-        .items
+    let names = items.iter().map(|t| t.ident.to_string()).collect();
+    let idents: Vec<syn::Ident> = items.iter().map(|t| t.ident.clone()).collect();
+    let generics: Vec<syn::Ident> =
+        idents.iter().map(|id| format_ident!("__{id}")).collect();
+    let decls = items
         .iter()
-        .filter_map(|item| {
-            let syn::TraitItem::Fn(m) = item else {
-                return None;
-            };
-            Some(generate_delegating_method(m, name))
+        .map(|t| {
+            let t = *t;
+            quote! { #t }
         })
         .collect();
+    let rewrites = idents
+        .iter()
+        .zip(generics.iter())
+        .map(|(id, gp)| (id.to_string(), gp.clone()))
+        .collect();
+    AssocTypeInfo { names, idents, generics, decls, rewrites }
+}
 
-    // Inner trait supertraits: `__FooImpl: Debug + Clone`
-    let inner_supers = if supertraits.is_empty() {
-        quote! {}
-    } else {
-        quote! { : #supertraits }
-    };
-
-    // Public trait supertraits: `Foo: __FooImpl + Debug + Clone`
-    // The `+ Debug + Clone` is redundant (implied by `__FooImpl`) but
-    // makes the bounds visible in rustdoc and compiler diagnostics.
-    let public_supers = if supertraits.is_empty() {
-        quote! { #inner_name }
-    } else {
-        quote! { #inner_name + #supertraits }
-    };
-
-    quote! {
-        // (1) Hidden inner trait — carries __spec_* methods.
-        #[doc(hidden)]
-        #vis #unsafety trait #inner_name #inner_supers #where_clause {
-            #(#spec_decls)*
+fn build_trait_dyn_ref(
+    name: &syn::Ident,
+    trait_generic_params: &Punctuated<syn::GenericParam, Token![,]>,
+    assoc_type_idents: &[syn::Ident],
+    assoc_type_generics: &[syn::Ident],
+) -> proc_macro2::TokenStream {
+    let mut type_args: Vec<proc_macro2::TokenStream> = Vec::new();
+    for param in trait_generic_params {
+        match param {
+            syn::GenericParam::Type(t) => {
+                let id = &t.ident;
+                type_args.push(quote! { #id });
+            }
+            syn::GenericParam::Lifetime(l) => {
+                let lt = &l.lifetime;
+                type_args.push(quote! { #lt });
+            }
+            syn::GenericParam::Const(c) => {
+                let id = &c.ident;
+                type_args.push(quote! { #id });
+            }
         }
+    }
+    for (id, gp) in assoc_type_idents.iter().zip(assoc_type_generics.iter()) {
+        type_args.push(quote! { #id = #gp });
+    }
+    if type_args.is_empty() {
+        quote! { #name }
+    } else {
+        quote! { #name<#(#type_args),*> }
+    }
+}
 
-        // (2) Compile-time fat pointer assertion.
-        const _: () = assert!(
-            ::core::mem::size_of::<*const dyn #name>()
-                == 2 * ::core::mem::size_of::<usize>()
-        );
+fn build_assert_ty(
+    name: &syn::Ident,
+    trait_generic_params: &Punctuated<syn::GenericParam, Token![,]>,
+    assoc_type_idents: &[syn::Ident],
+) -> proc_macro2::TokenStream {
+    let mut args: Vec<proc_macro2::TokenStream> = Vec::new();
+    for param in trait_generic_params {
+        match param {
+            syn::GenericParam::Type(_) => args.push(quote! { () }),
+            syn::GenericParam::Lifetime(_) => args.push(quote! { 'static }),
+            syn::GenericParam::Const(_) => args.push(quote! { { 0 } }),
+        }
+    }
+    for id in assoc_type_idents {
+        args.push(quote! { #id = () });
+    }
+    if args.is_empty() {
+        quote! { *const dyn #name }
+    } else {
+        quote! { *const dyn #name<#(#args),*> }
+    }
+}
 
-        // (3) Vtable helpers on `dyn Trait`.
-        impl<'__devirt> dyn #name + '__devirt {
-            /// Split a fat pointer into `[data, vtable]`.
+fn build_vtable_helpers(
+    can_devirt: bool,
+    name: &syn::Ident,
+    inner_name: &syn::Ident,
+    inherent_impl_generics: &proc_macro2::TokenStream,
+    trait_dyn_ref: &proc_macro2::TokenStream,
+    assoc_type_idents: &[syn::Ident],
+) -> proc_macro2::TokenStream {
+    if !can_devirt {
+        return quote! {};
+    }
+    let vtable_coerce_ty = if assoc_type_idents.is_empty() {
+        quote! { *const Self }
+    } else {
+        quote! {
+            *const dyn #name<
+                #(#assoc_type_idents =
+                    <__DevirtT as #inner_name>::#assoc_type_idents),*
+            >
+        }
+    };
+    quote! {
+        impl #inherent_impl_generics dyn #trait_dyn_ref + '__devirt {
             #[doc(hidden)]
             #[inline(always)]
             pub fn __devirt_raw_parts(this: &Self) -> [usize; 2] {
-                // SAFETY: `&dyn Trait` is a two-`usize` fat pointer
-                // (verified by the compile-time assertion above).
-                unsafe { ::core::mem::transmute::<&Self, [usize; 2]>(this) }
+                unsafe {
+                    ::core::mem::transmute::<&Self, [usize; 2]>(this)
+                }
             }
 
-            /// Vtable pointer for the `(T, Trait)` pair.
             #[doc(hidden)]
             #[inline(always)]
             pub fn __devirt_vtable_for<
@@ -238,44 +269,192 @@ fn emit_trait_expansion(
                     ::core::ptr::without_provenance(
                         ::core::mem::align_of::<__DevirtT>(),
                     );
-                let fat: *const Self = fake;
-                // SAFETY: `*const dyn Trait` is two `usize`s. We read
-                // only the vtable half; the dangling data half is
-                // discarded.
+                let fat: #vtable_coerce_ty = fake;
                 let __parts: [usize; 2] = unsafe {
-                    ::core::mem::transmute::<*const Self, [usize; 2]>(fat)
+                    ::core::mem::transmute::<
+                        #vtable_coerce_ty, [usize; 2]
+                    >(fat)
                 };
                 __parts[1]
             }
         }
+    }
+}
 
-        // (4) Inherent dispatch methods.
-        impl<'__devirt> dyn #name + '__devirt {
+fn build_blanket_impl(
+    unsafety: Option<&syn::token::Unsafe>,
+    has_trait_generics: bool,
+    name: &syn::Ident,
+    inner_name: &syn::Ident,
+    trait_generic_params: &Punctuated<syn::GenericParam, Token![,]>,
+    trait_ty_generics: &syn::TypeGenerics<'_>,
+    trait_where_clause: Option<&syn::WhereClause>,
+) -> proc_macro2::TokenStream {
+    if has_trait_generics {
+        quote! {
+            #unsafety impl<
+                __DevirtT: #inner_name #trait_ty_generics + ?Sized,
+                #trait_generic_params
+            > #name #trait_ty_generics for __DevirtT #trait_where_clause {}
+        }
+    } else {
+        quote! {
+            #unsafety impl<__DevirtT: #inner_name + ?Sized> #name
+                for __DevirtT #trait_where_clause {}
+        }
+    }
+}
+
+fn build_dispatch_methods(
+    trait_item: &syn::ItemTrait,
+    can_devirt: bool,
+    assoc_info: &AssocTypeInfo,
+    inner_name: &syn::Ident,
+    trait_dyn_ref: &proc_macro2::TokenStream,
+    hot_types: &[syn::Type],
+) -> Vec<proc_macro2::TokenStream> {
+    trait_item
+        .items
+        .iter()
+        .filter_map(|item| {
+            let syn::TraitItem::Fn(m) = item else {
+                return None;
+            };
+            let references_assoc =
+                method_references_assoc_types(&m.sig, &assoc_info.names);
+            if !can_devirt || references_assoc {
+                Some(generate_fallback_method(m, inner_name, &assoc_info.rewrites))
+            } else {
+                Some(generate_dispatch_method(
+                    m, trait_dyn_ref, inner_name, hot_types, &assoc_info.rewrites,
+                ))
+            }
+        })
+        .collect()
+}
+
+fn build_delegating_methods(
+    trait_item: &syn::ItemTrait,
+    trait_dyn_ref: &proc_macro2::TokenStream,
+    assoc_rewrites: &HashMap<String, syn::Ident>,
+) -> Vec<proc_macro2::TokenStream> {
+    trait_item
+        .items
+        .iter()
+        .filter_map(|item| {
+            let syn::TraitItem::Fn(m) = item else {
+                return None;
+            };
+            Some(generate_delegating_method(m, trait_dyn_ref, assoc_rewrites))
+        })
+        .collect()
+}
+
+fn emit_trait_expansion(
+    trait_item: &syn::ItemTrait,
+    hot_types: &[syn::Type],
+) -> TokenStream {
+    let unsafety = &trait_item.unsafety;
+    let vis = &trait_item.vis;
+    let name = &trait_item.ident;
+    let outer_attrs = &trait_item.attrs;
+    let supertraits = &trait_item.supertraits;
+    let inner_name = format_ident!("__{name}Impl");
+
+    // ── Trait-level generics ──────────────────────────────────────
+    let has_trait_generics = !trait_item.generics.params.is_empty();
+    let trait_generic_params = &trait_item.generics.params;
+    let trait_where_clause = &trait_item.generics.where_clause;
+    let (_, trait_ty_generics, _) = trait_item.generics.split_for_impl();
+
+    let assoc_info = collect_assoc_types(trait_item);
+    let can_devirt = !has_trait_generics;
+
+    let trait_dyn_ref = build_trait_dyn_ref(
+        name,
+        trait_generic_params,
+        &assoc_info.idents,
+        &assoc_info.generics,
+    );
+    let spec_decls = generate_spec_decls(trait_item);
+    let dispatch_methods = build_dispatch_methods(
+        trait_item, can_devirt, &assoc_info, &inner_name, &trait_dyn_ref, hot_types,
+    );
+    let delegating_methods = build_delegating_methods(
+        trait_item, &trait_dyn_ref, &assoc_info.rewrites,
+    );
+
+    let inner_supers = if supertraits.is_empty() {
+        quote! {}
+    } else {
+        quote! { : #supertraits }
+    };
+    let public_supers = if supertraits.is_empty() {
+        quote! { #inner_name #trait_ty_generics }
+    } else {
+        quote! { #inner_name #trait_ty_generics + #supertraits }
+    };
+
+    let mut extra_params: Vec<proc_macro2::TokenStream> = Vec::new();
+    for param in trait_generic_params {
+        extra_params.push(quote! { #param });
+    }
+    for gp in &assoc_info.generics {
+        extra_params.push(quote! { #gp });
+    }
+    let inherent_impl_generics = if extra_params.is_empty() {
+        quote! { <'__devirt> }
+    } else {
+        quote! { <'__devirt, #(#extra_params),*> }
+    };
+    let trait_def_generics = if has_trait_generics {
+        quote! { <#trait_generic_params> }
+    } else {
+        quote! {}
+    };
+
+    let assert_ty = build_assert_ty(name, trait_generic_params, &assoc_info.idents);
+    let vtable_helpers = build_vtable_helpers(
+        can_devirt, name, &inner_name, &inherent_impl_generics,
+        &trait_dyn_ref, &assoc_info.idents,
+    );
+    let blanket_impl = build_blanket_impl(
+        unsafety.as_ref(), has_trait_generics, name, &inner_name,
+        trait_generic_params, &trait_ty_generics, trait_where_clause.as_ref(),
+    );
+    let assoc_type_decls = &assoc_info.decls;
+
+    quote! {
+        #[doc(hidden)]
+        #vis #unsafety trait #inner_name #trait_def_generics
+            #inner_supers #trait_where_clause
+        { #(#assoc_type_decls)* #(#spec_decls)* }
+
+        const _: () = assert!(
+            ::core::mem::size_of::<#assert_ty>()
+                == 2 * ::core::mem::size_of::<usize>()
+        );
+
+        #vtable_helpers
+
+        impl #inherent_impl_generics dyn #trait_dyn_ref + '__devirt {
             #(#dispatch_methods)*
         }
+        impl #inherent_impl_generics
+            dyn #trait_dyn_ref + ::core::marker::Send + '__devirt
+        { #(#delegating_methods)* }
+        impl #inherent_impl_generics
+            dyn #trait_dyn_ref + ::core::marker::Sync + '__devirt
+        { #(#delegating_methods)* }
+        impl #inherent_impl_generics
+            dyn #trait_dyn_ref + ::core::marker::Send
+            + ::core::marker::Sync + '__devirt
+        { #(#delegating_methods)* }
 
-        // (4a) dyn Trait + Send — delegate to base dispatch.
-        impl<'__devirt> dyn #name + ::core::marker::Send + '__devirt {
-            #(#delegating_methods)*
-        }
-
-        // (4b) dyn Trait + Sync — delegate to base dispatch.
-        impl<'__devirt> dyn #name + ::core::marker::Sync + '__devirt {
-            #(#delegating_methods)*
-        }
-
-        // (4c) dyn Trait + Send + Sync — delegate to base dispatch.
-        impl<'__devirt> dyn #name + ::core::marker::Send + ::core::marker::Sync + '__devirt {
-            #(#delegating_methods)*
-        }
-
-        // (5) Public marker trait.
         #(#outer_attrs)*
-        #vis #unsafety trait #name: #public_supers #where_clause {}
-
-        // (6) Blanket impl.
-        #unsafety impl<__DevirtT: #inner_name + ?Sized> #name
-            for __DevirtT #where_clause {}
+        #vis #unsafety trait #name #trait_def_generics
+            : #public_supers #trait_where_clause {}
+        #blanket_impl
     }
     .into()
 }
@@ -376,13 +555,100 @@ fn rewrite_sig_with_named_args(
     (sig, arg_names)
 }
 
+// ── Associated type helpers ────────────────────────────────────────────────
+
+struct AssocTypeFinder<'a> {
+    assoc_names: &'a HashSet<String>,
+    found: bool,
+}
+
+impl Visit<'_> for AssocTypeFinder<'_> {
+    fn visit_path(&mut self, i: &syn::Path) {
+        if i.segments.len() >= 2
+            && i.segments[0].ident == "Self"
+            && self
+                .assoc_names
+                .contains(&i.segments[1].ident.to_string())
+        {
+            self.found = true;
+        }
+        syn::visit::visit_path(self, i);
+    }
+}
+
+fn method_references_assoc_types(
+    sig: &syn::Signature,
+    assoc_names: &HashSet<String>,
+) -> bool {
+    if assoc_names.is_empty() {
+        return false;
+    }
+    let mut finder = AssocTypeFinder { assoc_names, found: false };
+    syn::visit::visit_signature(&mut finder, sig);
+    finder.found
+}
+
+struct RewriteSelfAssocTypes {
+    rewrites: HashMap<String, syn::Ident>,
+}
+
+impl VisitMut for RewriteSelfAssocTypes {
+    fn visit_path_mut(&mut self, i: &mut syn::Path) {
+        syn::visit_mut::visit_path_mut(self, i);
+        if i.segments.len() >= 2
+            && i.segments[0].ident == "Self"
+        {
+            let name = i.segments[1].ident.to_string();
+            if let Some(replacement) = self.rewrites.get(&name) {
+                *i = replacement.clone().into();
+            }
+        }
+    }
+}
+
+fn generate_fallback_method(
+    method: &syn::TraitItemFn,
+    inner_name: &syn::Ident,
+    assoc_rewrites: &HashMap<String, syn::Ident>,
+) -> proc_macro2::TokenStream {
+    let sig = &method.sig;
+    let attrs = &method.attrs;
+    let spec_name = format_ident!("__spec_{}", sig.ident);
+    let is_unsafe = sig.unsafety.is_some();
+
+    let (mut dispatch_sig, arg_names) = rewrite_sig_with_named_args(sig);
+    if !assoc_rewrites.is_empty() {
+        let mut rewriter = RewriteSelfAssocTypes {
+            rewrites: assoc_rewrites.clone(),
+        };
+        rewriter.visit_signature_mut(&mut dispatch_sig);
+    }
+
+    let call = quote! { #inner_name::#spec_name(self, #(#arg_names),*) };
+    let body = if is_unsafe {
+        quote! { unsafe { #call } }
+    } else {
+        call
+    };
+
+    quote! {
+        #(#attrs)*
+        #[doc(hidden)]
+        #[inline]
+        pub #dispatch_sig {
+            #body
+        }
+    }
+}
+
 // ── Dispatch method generation ──────────────────────────────────────────────
 
 fn generate_dispatch_method(
     method: &syn::TraitItemFn,
-    trait_name: &syn::Ident,
+    trait_dyn_ref: &proc_macro2::TokenStream,
     inner_name: &syn::Ident,
     hot_types: &[syn::Type],
+    assoc_rewrites: &HashMap<String, syn::Ident>,
 ) -> proc_macro2::TokenStream {
     let sig = &method.sig;
     let attrs = &method.attrs;
@@ -403,16 +669,22 @@ fn generate_dispatch_method(
     let is_mut = receiver.mutability.is_some();
     let is_unsafe = sig.unsafety.is_some();
 
-    let (dispatch_sig, arg_names) = rewrite_sig_with_named_args(sig);
+    let (mut dispatch_sig, arg_names) = rewrite_sig_with_named_args(sig);
+    if !assoc_rewrites.is_empty() {
+        let mut rewriter = RewriteSelfAssocTypes {
+            rewrites: assoc_rewrites.clone(),
+        };
+        rewriter.visit_signature_mut(&mut dispatch_sig);
+    }
 
     let raw_parts = if is_mut {
-        quote! { let __raw = <dyn #trait_name>::__devirt_raw_parts(&*self); }
+        quote! { let __raw = <dyn #trait_dyn_ref>::__devirt_raw_parts(&*self); }
     } else {
-        quote! { let __raw = <dyn #trait_name>::__devirt_raw_parts(self); }
+        quote! { let __raw = <dyn #trait_dyn_ref>::__devirt_raw_parts(self); }
     };
 
     let hot_checks = gen_hot_checks(
-        hot_types, trait_name, &spec_name, &arg_names, is_mut,
+        hot_types, trait_dyn_ref, &spec_name, &arg_names, is_mut,
     );
 
     let fallback = if is_unsafe {
@@ -435,7 +707,7 @@ fn generate_dispatch_method(
 
 fn gen_hot_checks(
     hot_types: &[syn::Type],
-    trait_name: &syn::Ident,
+    trait_dyn_ref: &proc_macro2::TokenStream,
     spec_name: &syn::Ident,
     arg_names: &[syn::Ident],
     is_mut: bool,
@@ -446,7 +718,7 @@ fn gen_hot_checks(
             if is_mut {
                 quote! {
                     if __raw[1]
-                        == <dyn #trait_name>::__devirt_vtable_for::<#hot>()
+                        == <dyn #trait_dyn_ref>::__devirt_vtable_for::<#hot>()
                     {
                         let __p: *mut #hot = __raw[0] as *mut #hot;
                         // SAFETY: vtable identity implies type identity.
@@ -461,7 +733,7 @@ fn gen_hot_checks(
             } else {
                 quote! {
                     if __raw[1]
-                        == <dyn #trait_name>::__devirt_vtable_for::<#hot>()
+                        == <dyn #trait_dyn_ref>::__devirt_vtable_for::<#hot>()
                     {
                         let __p: *const #hot = __raw[0] as *const #hot;
                         // SAFETY: vtable identity implies type identity.
@@ -486,7 +758,8 @@ fn gen_hot_checks(
 /// with `#[inline(always)]`.
 fn generate_delegating_method(
     method: &syn::TraitItemFn,
-    trait_name: &syn::Ident,
+    trait_dyn_ref: &proc_macro2::TokenStream,
+    assoc_rewrites: &HashMap<String, syn::Ident>,
 ) -> proc_macro2::TokenStream {
     let sig = &method.sig;
     let method_name = &sig.ident;
@@ -506,23 +779,26 @@ fn generate_delegating_method(
 
     let is_mut = receiver.mutability.is_some();
     let is_unsafe = sig.unsafety.is_some();
-    let (dispatch_sig, arg_names) = rewrite_sig_with_named_args(sig);
+    let (mut dispatch_sig, arg_names) = rewrite_sig_with_named_args(sig);
+    if !assoc_rewrites.is_empty() {
+        let mut rewriter = RewriteSelfAssocTypes {
+            rewrites: assoc_rewrites.clone(),
+        };
+        rewriter.visit_signature_mut(&mut dispatch_sig);
+    }
 
-    // Coerce to the base `dyn Trait` and call the dispatch method.
     let coerce_and_call = if is_mut {
         quote! {
-            let __devirt_base: &mut (dyn #trait_name + '__devirt) = self;
+            let __devirt_base: &mut (dyn #trait_dyn_ref + '__devirt) = self;
             __devirt_base.#method_name(#(#arg_names),*)
         }
     } else {
         quote! {
-            let __devirt_base: &(dyn #trait_name + '__devirt) = self;
+            let __devirt_base: &(dyn #trait_dyn_ref + '__devirt) = self;
             __devirt_base.#method_name(#(#arg_names),*)
         }
     };
 
-    // When the method is `unsafe fn`, the base dispatch method is also
-    // `unsafe fn`, so the call must be inside an `unsafe` block.
     let delegation = if is_unsafe {
         quote! { unsafe { #coerce_and_call } }
     } else {
@@ -573,15 +849,28 @@ fn expand_impl(attr: &TokenStream, impl_item: &syn::ItemImpl) -> TokenStream {
     }
 
     let unsafety = &impl_item.unsafety;
-    let trait_name = &trait_path
+    let trait_segment = trait_path
         .segments
         .last()
-        .expect("validated: path non-empty")
-        .ident;
+        .expect("validated: path non-empty");
+    let trait_name = &trait_segment.ident;
     let inner_name = format_ident!("__{trait_name}Impl");
+    let trait_args = &trait_segment.arguments;
     let ty = &impl_item.self_ty;
     let (impl_generics, _, where_clause) =
         impl_item.generics.split_for_impl();
+
+    let type_items: Vec<_> = impl_item
+        .items
+        .iter()
+        .filter_map(|item| {
+            if let syn::ImplItem::Type(t) = item {
+                Some(quote! { #t })
+            } else {
+                None
+            }
+        })
+        .collect();
 
     // Collect method names so sibling calls in impl bodies
     // (e.g. `self.area()`) are rewritten to `self.__spec_area()`.
@@ -622,7 +911,10 @@ fn expand_impl(attr: &TokenStream, impl_item: &syn::ItemImpl) -> TokenStream {
         .collect();
 
     quote! {
-        #unsafety impl #impl_generics #inner_name for #ty #where_clause {
+        #unsafety impl #impl_generics #inner_name #trait_args
+            for #ty #where_clause
+        {
+            #(#type_items)*
             #(#spec_methods)*
         }
     }
