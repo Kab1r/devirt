@@ -19,7 +19,7 @@ devirt-macros = { path = "crates/macros", version = "0.2.0" }
 syn = { version = "2", features = ["full", "visit-mut"] }
 quote = "1"
 proc-macro2 = "1"
-vstd = { version = "=0.0.0-2026-04-12-0118", default-features = false }
+vstd = { version = "=0.0.0-2026-04-19-0121", default-features = false }
 
 [profile.bench]
 lto = "thin"
