@@ -10,7 +10,7 @@ env:
   RUST_BACKTRACE: 1
   # Kept in sync with the `vstd` crate version in Cargo.toml by Renovate
   # (see .github/renovate.json5 — the `verus` group bundles the two updates).
-  VERUS_TAG: release/0.2026.04.12.f1166c4
+  VERUS_TAG: release/0.2026.04.19.6f7d4de
 
 permissions:
   contents: read
