@@ -284,6 +284,13 @@ fn build_fat_ptr_assertion(
         quote! { where #(#where_preds),* }
     };
 
+    // For generic/associated-type traits the assertion lives inside a
+    // generic function that is intentionally never called.  This means
+    // the assert is not monomorphised and therefore not evaluated at
+    // compile time — it only verifies that `*const dyn Trait<…>` is a
+    // well-formed type.  The actual size invariant (fat pointers are
+    // always two `usize`s) is guaranteed by the Rust ABI and is
+    // compile-time-checked for every non-generic trait expansion.
     quote! {
         const _: () = {
             fn __devirt_assert<#(#fn_params),*>() #where_clause {
@@ -317,13 +324,20 @@ fn strip_param_defaults(param: &syn::GenericParam) -> proc_macro2::TokenStream {
 }
 
 fn predicate_references_self(pred: &syn::WherePredicate) -> bool {
-    if let syn::WherePredicate::Type(pt) = pred
-        && let syn::Type::Path(tp) = &pt.bounded_ty
-        && let Some(first) = tp.path.segments.first()
-    {
-        return first.ident == "Self";
+    struct SelfFinder {
+        found: bool,
     }
-    false
+    impl Visit<'_> for SelfFinder {
+        fn visit_path(&mut self, i: &syn::Path) {
+            if i.segments.first().is_some_and(|s| s.ident == "Self") {
+                self.found = true;
+            }
+            syn::visit::visit_path(self, i);
+        }
+    }
+    let mut finder = SelfFinder { found: false };
+    syn::visit::visit_where_predicate(&mut finder, pred);
+    finder.found
 }
 
 fn build_vtable_helpers(
