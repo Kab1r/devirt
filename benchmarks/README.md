@@ -4,12 +4,20 @@ Benchmarks measuring `devirt`'s impact on dispatch patterns from real Rust proje
 
 ## tantivy search engine — scorer dispatch (`tantivy-devirt/`)
 
-tantivy's per-document scoring loop calls `scorer.score()` (BM25: ~10
-arithmetic ops) and `scorer.advance()` through `&mut dyn Scorer` on every
-matching document. This dispatch is **mandatory** — the scorer type comes
-from the user's search query parsed at runtime.
+Reproduces tantivy's per-document scoring loop. tantivy iterates over
+matching documents calling `scorer.score()` (BM25: ~10 arithmetic ops)
+and `scorer.advance()` through `&mut dyn Scorer` — mandatory dynamic
+dispatch since the scorer type comes from the user's search query parsed
+at runtime.
 
 Reference: [tantivy `src/query/weight.rs`](https://github.com/quickwit-oss/tantivy/blob/main/src/query/weight.rs)
+
+Note: tantivy already manually devirtualizes its hottest paths
+(`TermWeight::for_each` calls the concrete `TermScorer` directly).
+The `dyn Scorer` fallback runs for uncommon query types (phrase, regex,
+fuzzy). This benchmark measures the speedup devirt would provide on that
+fallback path, and demonstrates what tantivy achieves manually that devirt
+could automate.
 
 ### Results (TermScorer with BM25 scoring)
 
