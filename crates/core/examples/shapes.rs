@@ -6,6 +6,7 @@
 //!
 //! Note: this example uses `std`; the `devirt` crate itself is `#![no_std]`.
 #![expect(clippy::print_stdout, reason = "example intentionally prints output to demonstrate API usage")]
+#![expect(clippy::unnecessary_literal_bound, reason = "trait declares &str, not &'static str")]
 
 struct Circle { radius: f64 }
 struct Rect { w: f64, h: f64 }
@@ -97,9 +98,9 @@ impl Shape for Triangle {
     fn name(&self) -> &str { "triangle" }
 }
 
-// Downstream type — not in the hot list, automatically uses vtable
-#[devirt::devirt]
-impl Shape for Hexagon {
+// Cold type — implements ShapeBase directly, no #[devirt] needed.
+// Downstream crates can do this without depending on devirt at all.
+impl ShapeBase for Hexagon {
     fn area(&self) -> f64 { 1.5 * 3.0_f64.sqrt() * self.side * self.side }
     fn perimeter(&self) -> f64 { 6.0 * self.side }
     fn scale(&mut self, factor: f64) { self.side *= factor; }

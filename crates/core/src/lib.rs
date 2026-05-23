@@ -137,7 +137,7 @@ pub use paste::paste as __paste;
 macro_rules! __devirt_define {
     (@trait [$($unsafety:tt)*]
         $(#[$meta:meta])*
-        $vis:vis $trait_name:ident [$($hot:ty),+ $(,)?] {
+        $vis:vis $trait_name:ident $base_name:ident [$($hot:ty),+ $(,)?] {
             $($methods:tt)*
         }
     ) => {
@@ -146,58 +146,44 @@ macro_rules! __devirt_define {
             $vis $($unsafety)* trait [<__ $trait_name Impl>] {
                 $crate::__devirt_define!{@spec_decl $($methods)*}
             }
+        }
 
-            // Compile-time sanity check: `*const dyn Trait` must be a fat
-            // pointer of exactly two `usize`s. If a future Rust edition
-            // changes this, compilation fails loudly rather than producing
-            // UB at runtime.
-            const _: () = assert!(
-                ::core::mem::size_of::<*const dyn $trait_name>()
-                    == 2 * ::core::mem::size_of::<usize>()
-            );
+        /// Base implementation trait: implement this for cold types
+        /// without depending on `devirt`.
+        $vis $($unsafety)* trait $base_name {
+            $($methods)*
+        }
 
-            // Inherent helpers on `dyn $trait_name` that expose the fat
-            // pointer's `(data, vtable)` halves and the compiler-assigned
-            // vtable address for a concrete hot type. These are `#[inline(
-            // always)]` so LTO folds them into the dispatch shim.
+        $crate::__paste! {
+            $($unsafety)* impl<__DevirtT: $base_name + ?Sized> [<__ $trait_name Impl>] for __DevirtT {
+                $crate::__devirt_define!{@blanket_bridge $trait_name, $($methods)*}
+            }
+        }
+
+        const _: () = assert!(
+            ::core::mem::size_of::<*const dyn $trait_name>()
+                == 2 * ::core::mem::size_of::<usize>()
+        );
+
+        $crate::__paste! {
             impl<'__devirt> dyn $trait_name + '__devirt {
-                /// Split a fat pointer into `[data, vtable]`.
                 #[doc(hidden)]
                 #[inline(always)]
                 pub fn __devirt_raw_parts(this: &Self) -> [usize; 2] {
-                    // SAFETY: `&(dyn $trait_name + '_)` is a two-`usize`
-                    // fat pointer (verified by the compile-time
-                    // `size_of` assertion above) laid out as
-                    // `[data, vtable]`. Transmuting to `[usize; 2]`
-                    // only reinterprets bits — the data half is still
-                    // borrowed for the duration of `this`, so the
-                    // result may not outlive the borrow.
                     unsafe { ::core::mem::transmute::<
                         &Self, [usize; 2],
                     >(this) }
                 }
 
-                /// Vtable pointer for the `(T, Self)` pair.
                 #[doc(hidden)]
                 #[inline(always)]
                 pub fn __devirt_vtable_for<
                     __DevirtT: [<__ $trait_name Impl>] + 'static,
                 >() -> usize {
-                    // A dangling, non-null, aligned `*const __DevirtT`.
-                    // We never dereference it — the coercion below only
-                    // reads the vtable metadata the compiler attaches.
                     let fake: *const __DevirtT = ::core::ptr::without_provenance(
                         ::core::mem::align_of::<__DevirtT>(),
                     );
-                    // Coercion is a metadata-attaching op; the resulting
-                    // fat pointer's vtable half is the
-                    // `(__DevirtT, $trait_name)` vtable selected by the
-                    // compiler. Its data half is `fake`, which we discard.
                     let fat: *const Self = fake;
-                    // SAFETY: `*const Self` (dyn trait fat pointer) is
-                    // two `usize`s by the compile-time assertion above.
-                    // We read only the vtable half; the dangling data
-                    // half is discarded without dereferencing.
                     let __parts: [usize; 2] = unsafe {
                         ::core::mem::transmute::<
                             *const Self, [usize; 2],
@@ -207,14 +193,6 @@ macro_rules! __devirt_define {
                 }
             }
 
-            // Inherent dispatch methods on `dyn $trait_name`. These
-            // contain the vtable-comparison hot-path and take priority
-            // over the trait's default methods during method resolution,
-            // so a call like `dyn_trait.method()` reaches this block
-            // before falling back to the trait method. Putting the cast
-            // `self as *const dyn $trait_name` here (where `Self = dyn
-            // $trait_name`) avoids the `Self: Sized` requirement that
-            // would otherwise arise in a default method body.
             impl<'__devirt> dyn $trait_name + '__devirt {
                 $crate::__devirt_define!{
                     @inherent_decl
@@ -225,18 +203,6 @@ macro_rules! __devirt_define {
                 }
             }
 
-            // The public trait is a thin marker over the hidden inner
-            // trait: it carries no methods of its own, so `dyn
-            // $trait_name` has no trait methods to conflict with the
-            // inherent dispatch methods emitted above. Methods named
-            // from the user's declaration resolve unambiguously to the
-            // inherent block.
-            //
-            // Concrete-type callers that want to bypass dispatch
-            // entirely can either call `<$trait_name>::$method` via
-            // an explicit dyn coercion `(&t as &dyn $trait_name).$method
-            // (...)` or call `<T as __${trait_name}Impl>::__spec_$method
-            // (&t, ...)` via UFCS.
             $(#[$meta])*
             $vis $($unsafety)* trait $trait_name: [<__ $trait_name Impl>] {}
 
@@ -269,6 +235,45 @@ macro_rules! __devirt_define {
     };
 
     (@spec_decl) => {};
+
+    // ── @blanket_bridge ────────────────────────────────────────────────────
+    //
+    // Generates method bodies for the blanket
+    // `impl<T: FooBase> __FooImpl for T { ... }`.
+    // Each `__spec_*` method delegates to the corresponding
+    // `FooBase::method` call.
+
+    // &self
+    (@blanket_bridge $trait_name:ident,
+        $(#[$_attr:meta])*
+        fn $method:ident(&self $(, $arg:ident : $argty:ty)*) $(-> $ret:ty)?;
+        $($rest:tt)*
+    ) => {
+        $crate::__paste! {
+            #[inline(always)]
+            fn [<__spec_ $method>](&self $(, $arg: $argty)*) $(-> $ret)? {
+                [<$trait_name Base>]::$method(self $(, $arg)*)
+            }
+        }
+        $crate::__devirt_define!{@blanket_bridge $trait_name, $($rest)*}
+    };
+
+    // &mut self
+    (@blanket_bridge $trait_name:ident,
+        $(#[$_attr:meta])*
+        fn $method:ident(&mut self $(, $arg:ident : $argty:ty)*) $(-> $ret:ty)?;
+        $($rest:tt)*
+    ) => {
+        $crate::__paste! {
+            #[inline(always)]
+            fn [<__spec_ $method>](&mut self $(, $arg: $argty)*) $(-> $ret)? {
+                [<$trait_name Base>]::$method(self $(, $arg)*)
+            }
+        }
+        $crate::__devirt_define!{@blanket_bridge $trait_name, $($rest)*}
+    };
+
+    (@blanket_bridge $trait_name:ident,) => {};
 
     // ── @inherent_decl ──────────────────────────────────────────────────────
     //
@@ -578,11 +583,13 @@ macro_rules! devirt {
             $($methods:tt)*
         }
     ) => {
-        $crate::__devirt_define! {
-            @trait []
-            $(#[$meta])*
-            $vis $name [$($hot),+] {
-                $($methods)*
+        $crate::__paste! {
+            $crate::__devirt_define! {
+                @trait []
+                $(#[$meta])*
+                $vis $name [<$name Base>] [$($hot),+] {
+                    $($methods)*
+                }
             }
         }
     };
@@ -594,11 +601,13 @@ macro_rules! devirt {
             $($methods:tt)*
         }
     ) => {
-        $crate::__devirt_define! {
-            @trait [unsafe]
-            $(#[$meta])*
-            $vis $name [$($hot),+] {
-                $($methods)*
+        $crate::__paste! {
+            $crate::__devirt_define! {
+                @trait [unsafe]
+                $(#[$meta])*
+                $vis $name [<$name Base>] [$($hot),+] {
+                    $($methods)*
+                }
             }
         }
     };
@@ -659,7 +668,7 @@ mod primitives {
 
     crate::__devirt_define! {
         @trait []
-        pub Probe [Hot, Also] {
+        pub Probe ProbeBase [Hot, Also] {
             fn get(&self) -> u64;
             fn set(&mut self, v: u64);
         }
@@ -777,5 +786,35 @@ mod primitives {
     fn dispatch_through_box() {
         let boxed: Box<dyn Probe> = Box::new(Hot { val: 5 });
         assert_eq!(boxed.get(), 5);
+    }
+
+    /// Cold types can implement `ProbeBase` directly (no devirt macro)
+    /// and still participate in `dyn Probe` dispatch via the blanket.
+    struct NakedCold {
+        val: u64,
+    }
+
+    impl ProbeBase for NakedCold {
+        fn get(&self) -> u64 { self.val.wrapping_mul(2) }
+        fn set(&mut self, v: u64) { self.val = v.wrapping_mul(2); }
+    }
+
+    #[test]
+    fn cold_type_via_base_trait_ref() {
+        let nc = NakedCold { val: 5 };
+        assert_eq!((&nc as &dyn Probe).get(), 10);
+    }
+
+    #[test]
+    fn cold_type_via_base_trait_mut() {
+        let mut nc = NakedCold { val: 0 };
+        (&mut nc as &mut dyn Probe).set(3);
+        assert_eq!(nc.val, 6);
+    }
+
+    #[test]
+    fn cold_type_via_base_trait_box() {
+        let boxed: Box<dyn Probe> = Box::new(NakedCold { val: 7 });
+        assert_eq!(boxed.get(), 14);
     }
 }

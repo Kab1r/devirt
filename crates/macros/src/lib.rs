@@ -461,6 +461,118 @@ fn build_delegating_methods(
         .collect()
 }
 
+fn build_base_trait_items(
+    trait_item: &syn::ItemTrait,
+) -> Vec<proc_macro2::TokenStream> {
+    trait_item
+        .items
+        .iter()
+        .filter_map(|item| {
+            if let syn::TraitItem::Fn(m) = item {
+                let attrs = &m.attrs;
+                let sig = &m.sig;
+                Some(quote! { #(#attrs)* #sig; })
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn build_base_bridge_items(
+    trait_item: &syn::ItemTrait,
+    base_name: &syn::Ident,
+) -> Vec<proc_macro2::TokenStream> {
+    trait_item
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            syn::TraitItem::Type(t) => {
+                let type_name = &t.ident;
+                Some(quote! {
+                    type #type_name = <Self as #base_name>::#type_name;
+                })
+            }
+            syn::TraitItem::Fn(m) => {
+                let method_name = &m.sig.ident;
+                let spec_name = format_ident!("__spec_{method_name}");
+                let mut bridge_sig = m.sig.clone();
+                bridge_sig.ident = spec_name;
+                let arg_names: Vec<_> = m
+                    .sig
+                    .inputs
+                    .iter()
+                    .filter_map(|arg| {
+                        if let syn::FnArg::Typed(pat) = arg
+                            && let syn::Pat::Ident(pi) = &*pat.pat
+                        {
+                            return Some(&pi.ident);
+                        }
+                        None
+                    })
+                    .collect();
+                Some(quote! {
+                    #[inline(always)]
+                    #bridge_sig {
+                        #base_name::#method_name(self, #(#arg_names),*)
+                    }
+                })
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+#[expect(clippy::too_many_arguments)]
+fn build_base_trait_expansion(
+    trait_item: &syn::ItemTrait,
+    unsafety: Option<&syn::token::Unsafe>,
+    has_trait_generics: bool,
+    base_name: &syn::Ident,
+    inner_name: &syn::Ident,
+    trait_generic_params: &Punctuated<syn::GenericParam, Token![,]>,
+    trait_ty_generics: &syn::TypeGenerics<'_>,
+    trait_where_clause: Option<&syn::WhereClause>,
+    inner_supers: &proc_macro2::TokenStream,
+) -> proc_macro2::TokenStream {
+    let vis = &trait_item.vis;
+    let base_trait_items = build_base_trait_items(trait_item);
+    let base_bridge_items = build_base_bridge_items(trait_item, base_name);
+    let assoc_type_decls = collect_assoc_types(trait_item).decls;
+    let trait_def_generics = if has_trait_generics {
+        quote! { <#trait_generic_params> }
+    } else {
+        quote! {}
+    };
+    let base_blanket = if has_trait_generics {
+        quote! {
+            #unsafety impl<
+                __DevirtT: #base_name #trait_ty_generics + ?Sized,
+                #trait_generic_params
+            > #inner_name #trait_ty_generics for __DevirtT #trait_where_clause {
+                #(#base_bridge_items)*
+            }
+        }
+    } else {
+        quote! {
+            #unsafety impl<__DevirtT: #base_name + ?Sized>
+                #inner_name for __DevirtT #trait_where_clause
+            {
+                #(#base_bridge_items)*
+            }
+        }
+    };
+    quote! {
+        /// Base implementation trait: implement this for cold types
+        /// without depending on `devirt`.
+        #vis #unsafety trait #base_name #trait_def_generics
+            #inner_supers #trait_where_clause
+        { #(#assoc_type_decls)* #(#base_trait_items)* }
+
+        #base_blanket
+    }
+}
+
 fn emit_trait_expansion(
     trait_item: &syn::ItemTrait,
     hot_types: &[syn::Type],
@@ -535,11 +647,20 @@ fn emit_trait_expansion(
     );
     let assoc_type_decls = &assoc_info.decls;
 
+    let base_name = format_ident!("{name}Base");
+    let base_expansion = build_base_trait_expansion(
+        trait_item, unsafety.as_ref(), has_trait_generics, &base_name,
+        &inner_name, trait_generic_params, &trait_ty_generics,
+        trait_where_clause.as_ref(), &inner_supers,
+    );
+
     quote! {
         #[doc(hidden)]
         #vis #unsafety trait #inner_name #trait_def_generics
             #inner_supers #trait_where_clause
         { #(#assoc_type_decls)* #(#spec_decls)* }
+
+        #base_expansion
 
         #fat_ptr_assertion
 

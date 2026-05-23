@@ -3,7 +3,7 @@ error[E0046]: not all trait items implemented, missing: `__spec_second`
    |
  3 | / devirt::__devirt_define! {
  4 | |     @trait []
- 5 | |     pub TwoMethods [Foo] {
+ 5 | |     pub TwoMethods TwoMethodsBase [Foo] {
  6 | |         fn first(&self) -> i32;
 ...  |
  9 | | }
