@@ -471,7 +471,10 @@ fn build_base_trait_items(
             if let syn::TraitItem::Fn(m) = item {
                 let attrs = &m.attrs;
                 let sig = &m.sig;
-                Some(quote! { #(#attrs)* #sig; })
+                Some(m.default.as_ref().map_or_else(
+                    || quote! { #(#attrs)* #sig; },
+                    |body| quote! { #(#attrs)* #sig #body },
+                ))
             } else {
                 None
             }
@@ -482,6 +485,7 @@ fn build_base_trait_items(
 fn build_base_bridge_items(
     trait_item: &syn::ItemTrait,
     base_name: &syn::Ident,
+    trait_ty_generics: &syn::TypeGenerics<'_>,
 ) -> Vec<proc_macro2::TokenStream> {
     trait_item
         .items
@@ -490,31 +494,18 @@ fn build_base_bridge_items(
             syn::TraitItem::Type(t) => {
                 let type_name = &t.ident;
                 Some(quote! {
-                    type #type_name = <Self as #base_name>::#type_name;
+                    type #type_name = <Self as #base_name #trait_ty_generics>::#type_name;
                 })
             }
             syn::TraitItem::Fn(m) => {
                 let method_name = &m.sig.ident;
                 let spec_name = format_ident!("__spec_{method_name}");
-                let mut bridge_sig = m.sig.clone();
+                let (mut bridge_sig, arg_names) = rewrite_sig_with_named_args(&m.sig);
                 bridge_sig.ident = spec_name;
-                let arg_names: Vec<_> = m
-                    .sig
-                    .inputs
-                    .iter()
-                    .filter_map(|arg| {
-                        if let syn::FnArg::Typed(pat) = arg
-                            && let syn::Pat::Ident(pi) = &*pat.pat
-                        {
-                            return Some(&pi.ident);
-                        }
-                        None
-                    })
-                    .collect();
                 Some(quote! {
                     #[inline(always)]
                     #bridge_sig {
-                        #base_name::#method_name(self, #(#arg_names),*)
+                        <Self as #base_name #trait_ty_generics>::#method_name(self, #(#arg_names),*)
                     }
                 })
             }
@@ -537,7 +528,7 @@ fn build_base_trait_expansion(
 ) -> proc_macro2::TokenStream {
     let vis = &trait_item.vis;
     let base_trait_items = build_base_trait_items(trait_item);
-    let base_bridge_items = build_base_bridge_items(trait_item, base_name);
+    let base_bridge_items = build_base_bridge_items(trait_item, base_name, trait_ty_generics);
     let assoc_type_decls = collect_assoc_types(trait_item).decls;
     let trait_def_generics = if has_trait_generics {
         quote! { <#trait_generic_params> }
