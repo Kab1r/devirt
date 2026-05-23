@@ -17,6 +17,8 @@
 //! The trait definition (`#[devirt::devirt(Hot1, Hot2)]` or
 //! `devirt::devirt! { trait Foo [Hot1, Hot2] { ... } }`) generates:
 //! - A hidden inner trait `__XImpl` with `__spec_*` method declarations
+//! - A public base trait `XBase` with the original method signatures
+//! - A blanket impl bridging `XBase` to `__XImpl`
 //! - Two `#[doc(hidden)]` inherent helpers on `dyn X`:
 //!   `__devirt_raw_parts` (extracts `[data, vtable]` from a fat pointer)
 //!   and `__devirt_vtable_for::<T>()` (returns the compiler-assigned
@@ -24,45 +26,30 @@
 //! - Inherent dispatch methods on `dyn X` whose bodies compare the
 //!   runtime vtable pointer against each hot type's vtable and dispatch
 //!   directly on match, or fall through to `__spec_*` otherwise
-//! - A blanket impl: `impl<T: __XImpl> X for T {}`
+//! - A marker trait `X: __XImpl` and blanket `impl<T: __XImpl> X for T {}`
 //!
-//! The impl (`#[devirt::devirt]` or `devirt::devirt! { impl Foo for T { ... } }`)
-//! generates:
-//! - `impl __XImpl for ConcreteType { ... }` with the `__spec_*` bodies
+//! Hot types use `#[devirt::devirt]` on their impl blocks to generate
+//! an optimized direct `impl __XImpl` with `#[inline]`.
 //!
-//! The proc-macro attribute (`#[devirt]`) emits the dispatch code
-//! directly via `quote!`, supporting the full range of method
-//! signatures that `syn` can parse (lifetimes, `unsafe fn`,
-//! supertraits, attributes, `extern "ABI" fn`, etc.).
-//! The declarative macro (`devirt!`) delegates to `__devirt_define!`,
-//! which has more limited syntax support.
+//! Cold types can either use `#[devirt::devirt]` (same as hot types)
+//! or implement `XBase` directly with standard Rust — no `devirt`
+//! dependency needed. The blanket impl automatically bridges `XBase`
+//! to `__XImpl`, satisfying the `X` trait bound.
 //!
 //! # Usage
 //!
 //! ```ignore
-//! // With proc-macro attribute (default):
 //! #[devirt::devirt(HotType1, HotType2)]
 //! pub trait MyTrait {
 //!     fn method(&self) -> ReturnType;
 //! }
 //!
+//! // Hot type — use #[devirt] for optimized direct dispatch
 //! #[devirt::devirt]
-//! impl MyTrait for HotType1 {
-//!     fn method(&self) -> ReturnType { ... }
-//! }
+//! impl MyTrait for HotType1 { ... }
 //!
-//! // With declarative macro (default-features = false):
-//! devirt::devirt! {
-//!     pub trait MyTrait [HotType1, HotType2] {
-//!         fn method(&self) -> ReturnType;
-//!     }
-//! }
-//!
-//! devirt::devirt! {
-//!     impl MyTrait for HotType1 {
-//!         fn method(&self) -> ReturnType { ... }
-//!     }
-//! }
+//! // Cold type — implement MyTraitBase directly, no devirt needed
+//! impl MyTraitBase for ColdType { ... }
 //! ```
 //!
 //! # LTO

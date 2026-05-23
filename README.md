@@ -51,9 +51,8 @@ impl Shape for Rect {
     fn scale(&mut self, factor: f64) { self.w *= factor; self.h *= factor; }
 }
 
-// 3. Cold type — falls back to vtable
-#[devirt::devirt]
-impl Shape for Triangle {
+// 3. Cold type — implement ShapeBase directly, no #[devirt] needed
+impl ShapeBase for Triangle {
     fn area(&self) -> f64 {
         let s = (self.a + self.b + self.c) / 2.0;
         (s * (s - self.a) * (s - self.b) * (s - self.c)).sqrt()
@@ -101,6 +100,29 @@ devirt::devirt! {
 ```
 
 Both APIs produce identical expanded code.
+
+### Cold types without `devirt`
+
+The trait definition generates a public `{Trait}Base` trait (e.g.,
+`ShapeBase`) with the original method signatures. Cold types can
+implement this trait directly — no `devirt` dependency required:
+
+```rust
+// In a downstream crate — no devirt in Cargo.toml
+impl my_shapes::ShapeBase for Hexagon {
+    fn area(&self) -> f64 { 1.5 * 3f64.sqrt() * self.side * self.side }
+    fn perimeter(&self) -> f64 { 6.0 * self.side }
+    fn scale(&mut self, factor: f64) { self.side *= factor; }
+}
+
+// Hexagon now satisfies the Shape bound:
+let shapes: Vec<Box<dyn my_shapes::Shape>> = vec![Box::new(Hexagon { side: 2.0 })];
+```
+
+Hot types still use `#[devirt::devirt]` (or `devirt::devirt!`) on their
+impl blocks — this generates an optimized direct dispatch path with
+`#[inline]`. Cold types can also use `#[devirt::devirt]` if they want
+the `#[inline]` annotation, but it is not required.
 
 ### `dyn Trait + Send` / `Sync`
 
