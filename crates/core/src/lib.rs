@@ -383,34 +383,30 @@ macro_rules! __devirt_define {
     ) => {{
         let __raw: [usize; 2] =
             <dyn $trait_name>::__devirt_raw_parts($this);
+        let __data: *const () = ::core::ptr::from_ref::<dyn $trait_name>($this).cast::<()>();
         $crate::__devirt_define!(@dispatch_ref_chain
-            $inner, $trait_name, $this, $method, ($($arg),*), [$($hot),+], __raw)
+            $inner, $trait_name, $this, $method, ($($arg),*), [$($hot),+], __raw, __data)
     }};
 
     (@dispatch_ref_chain $inner:ident, $trait_name:ident, $this:tt, $method:ident,
-        ($($arg:expr),*), [$first:ty $(, $rest:ty)*], $raw:ident
+        ($($arg:expr),*), [$first:ty $(, $rest:ty)*], $raw:ident, $data:ident
     ) => {{
         if $raw[1] == <dyn $trait_name>::__devirt_vtable_for::<$first>() {
-            // Bind the data-half to a local `*const $first` outside
-            // any `unsafe` block so that no metavariable is expanded
-            // inside `unsafe { ... }` — clippy's
-            // `macro_metavars_in_unsafe` lint flags the latter.
-            let __p: *const $first = $raw[0] as *const $first;
+            let __p: *const $first = $data.cast::<$first>();
             // SAFETY: vtable identity implies type identity. The data
-            // half is the original `&$first` the caller coerced into
-            // the fat pointer, valid for at least the lifetime of
-            // `$this`'s borrow.
+            // pointer preserves provenance from the original `&dyn`
+            // reference, valid for at least the lifetime of `$this`.
             let __concrete: &$first = unsafe { &*__p };
             return $crate::__paste! {
                 __concrete.[<__spec_ $method>]($($arg),*)
             };
         }
         $crate::__devirt_define!(@dispatch_ref_chain
-            $inner, $trait_name, $this, $method, ($($arg),*), [$($rest),*], $raw)
+            $inner, $trait_name, $this, $method, ($($arg),*), [$($rest),*], $raw, $data)
     }};
 
     (@dispatch_ref_chain $inner:ident, $trait_name:ident, $this:tt, $method:ident,
-        ($($arg:expr),*), [], $raw:ident
+        ($($arg:expr),*), [], $raw:ident, $data:ident
     ) => {
         $crate::__paste! { $inner::[<__spec_ $method>] }($this $(, $arg)*)
     };
@@ -422,15 +418,16 @@ macro_rules! __devirt_define {
     ) => {{
         let __raw: [usize; 2] =
             <dyn $trait_name>::__devirt_raw_parts($this);
+        let __data: *const () = ::core::ptr::from_ref::<dyn $trait_name>($this).cast::<()>();
         $crate::__devirt_define!(@dispatch_void_chain
-            $inner, $trait_name, $this, $method, ($($arg),*), [$($hot),+], __raw)
+            $inner, $trait_name, $this, $method, ($($arg),*), [$($hot),+], __raw, __data)
     }};
 
     (@dispatch_void_chain $inner:ident, $trait_name:ident, $this:tt, $method:ident,
-        ($($arg:expr),*), [$first:ty $(, $rest:ty)*], $raw:ident
+        ($($arg:expr),*), [$first:ty $(, $rest:ty)*], $raw:ident, $data:ident
     ) => {{
         if $raw[1] == <dyn $trait_name>::__devirt_vtable_for::<$first>() {
-            let __p: *const $first = $raw[0] as *const $first;
+            let __p: *const $first = $data.cast::<$first>();
             // SAFETY: see @dispatch_ref_chain above.
             let __concrete: &$first = unsafe { &*__p };
             $crate::__paste! {
@@ -439,42 +436,34 @@ macro_rules! __devirt_define {
             return;
         }
         $crate::__devirt_define!(@dispatch_void_chain
-            $inner, $trait_name, $this, $method, ($($arg),*), [$($rest),*], $raw)
+            $inner, $trait_name, $this, $method, ($($arg),*), [$($rest),*], $raw, $data)
     }};
 
     (@dispatch_void_chain $inner:ident, $trait_name:ident, $this:tt, $method:ident,
-        ($($arg:expr),*), [], $raw:ident
+        ($($arg:expr),*), [], $raw:ident, $data:ident
     ) => {
         $crate::__paste! { $inner::[<__spec_ $method>] }($this $(, $arg)*)
     };
 
     // ── @dispatch_mut: &mut self, non-void ─────────────────────────────────
-    //
-    // The `&mut` arms go through a raw `*mut` dereference rather than
-    // constructing a named `&mut $hot` binding. This keeps the hot-branch
-    // reborrow scoped to the single method call expression and avoids
-    // aliasing the still-live `&mut dyn $trait_name` under Stacked
-    // Borrows. The cold fallback path uses `self` directly.
 
     (@dispatch_mut $inner:ident, $trait_name:ident, $this:tt, $method:ident,
         ($($arg:expr),*), [$($hot:ty),+]
     ) => {{
-        // Shared reborrow of `&mut dyn $trait_name` to read the fat
-        // pointer halves. The reborrow is scoped to the call to
-        // `__devirt_raw_parts` and released before we construct any
-        // `&mut $first` on the hot path, so there is no overlapping
-        // mutable alias.
+        // Shared reborrow to read vtable, then raw pointer from the
+        // mutable ref to preserve provenance for the hot-path cast.
         let __raw: [usize; 2] =
             <dyn $trait_name>::__devirt_raw_parts(&*$this);
+        let __data: *mut () = ::core::ptr::from_mut::<dyn $trait_name>($this).cast::<()>();
         $crate::__devirt_define!(@dispatch_mut_chain
-            $inner, $trait_name, $this, $method, ($($arg),*), [$($hot),+], __raw)
+            $inner, $trait_name, $this, $method, ($($arg),*), [$($hot),+], __raw, __data)
     }};
 
     (@dispatch_mut_chain $inner:ident, $trait_name:ident, $this:tt, $method:ident,
-        ($($arg:expr),*), [$first:ty $(, $rest:ty)*], $raw:ident
+        ($($arg:expr),*), [$first:ty $(, $rest:ty)*], $raw:ident, $data:ident
     ) => {{
         if $raw[1] == <dyn $trait_name>::__devirt_vtable_for::<$first>() {
-            let __p: *mut $first = $raw[0] as *mut $first;
+            let __p: *mut $first = $data.cast::<$first>();
             // SAFETY: vtable match → the underlying storage is a
             // `$first`. The reborrow to `&mut $first` is scoped to
             // this branch (which returns immediately), so the
@@ -486,11 +475,11 @@ macro_rules! __devirt_define {
             };
         }
         $crate::__devirt_define!(@dispatch_mut_chain
-            $inner, $trait_name, $this, $method, ($($arg),*), [$($rest),*], $raw)
+            $inner, $trait_name, $this, $method, ($($arg),*), [$($rest),*], $raw, $data)
     }};
 
     (@dispatch_mut_chain $inner:ident, $trait_name:ident, $this:tt, $method:ident,
-        ($($arg:expr),*), [], $raw:ident
+        ($($arg:expr),*), [], $raw:ident, $data:ident
     ) => {
         $crate::__paste! { $inner::[<__spec_ $method>] }(&mut *$this $(, $arg)*)
     };
@@ -502,15 +491,16 @@ macro_rules! __devirt_define {
     ) => {{
         let __raw: [usize; 2] =
             <dyn $trait_name>::__devirt_raw_parts(&*$this);
+        let __data: *mut () = ::core::ptr::from_mut::<dyn $trait_name>($this).cast::<()>();
         $crate::__devirt_define!(@dispatch_mut_void_chain
-            $inner, $trait_name, $this, $method, ($($arg),*), [$($hot),+], __raw)
+            $inner, $trait_name, $this, $method, ($($arg),*), [$($hot),+], __raw, __data)
     }};
 
     (@dispatch_mut_void_chain $inner:ident, $trait_name:ident, $this:tt, $method:ident,
-        ($($arg:expr),*), [$first:ty $(, $rest:ty)*], $raw:ident
+        ($($arg:expr),*), [$first:ty $(, $rest:ty)*], $raw:ident, $data:ident
     ) => {{
         if $raw[1] == <dyn $trait_name>::__devirt_vtable_for::<$first>() {
-            let __p: *mut $first = $raw[0] as *mut $first;
+            let __p: *mut $first = $data.cast::<$first>();
             // SAFETY: see @dispatch_mut_chain above.
             let __ref: &mut $first = unsafe { &mut *__p };
             $crate::__paste! {
@@ -519,11 +509,11 @@ macro_rules! __devirt_define {
             return;
         }
         $crate::__devirt_define!(@dispatch_mut_void_chain
-            $inner, $trait_name, $this, $method, ($($arg),*), [$($rest),*], $raw)
+            $inner, $trait_name, $this, $method, ($($arg),*), [$($rest),*], $raw, $data)
     }};
 
     (@dispatch_mut_void_chain $inner:ident, $trait_name:ident, $this:tt, $method:ident,
-        ($($arg:expr),*), [], $raw:ident
+        ($($arg:expr),*), [], $raw:ident, $data:ident
     ) => {
         $crate::__paste! { $inner::[<__spec_ $method>] }(&mut *$this $(, $arg)*)
     };
