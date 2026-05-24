@@ -143,7 +143,7 @@ macro_rules! __devirt_define {
 
         $crate::__paste! {
             $($unsafety)* impl<__DevirtT: $base_name + ?Sized> [<__ $trait_name Impl>] for __DevirtT {
-                $crate::__devirt_define!{@blanket_bridge $trait_name, $($methods)*}
+                $crate::__devirt_define!{@blanket_bridge $base_name, $($methods)*}
             }
         }
 
@@ -231,7 +231,7 @@ macro_rules! __devirt_define {
     // `FooBase::method` call.
 
     // &self
-    (@blanket_bridge $trait_name:ident,
+    (@blanket_bridge $base_name:ident,
         $(#[$_attr:meta])*
         fn $method:ident(&self $(, $arg:ident : $argty:ty)*) $(-> $ret:ty)?;
         $($rest:tt)*
@@ -239,14 +239,14 @@ macro_rules! __devirt_define {
         $crate::__paste! {
             #[inline(always)]
             fn [<__spec_ $method>](&self $(, $arg: $argty)*) $(-> $ret)? {
-                [<$trait_name Base>]::$method(self $(, $arg)*)
+                $base_name::$method(self $(, $arg)*)
             }
         }
-        $crate::__devirt_define!{@blanket_bridge $trait_name, $($rest)*}
+        $crate::__devirt_define!{@blanket_bridge $base_name, $($rest)*}
     };
 
     // &mut self
-    (@blanket_bridge $trait_name:ident,
+    (@blanket_bridge $base_name:ident,
         $(#[$_attr:meta])*
         fn $method:ident(&mut self $(, $arg:ident : $argty:ty)*) $(-> $ret:ty)?;
         $($rest:tt)*
@@ -254,13 +254,13 @@ macro_rules! __devirt_define {
         $crate::__paste! {
             #[inline(always)]
             fn [<__spec_ $method>](&mut self $(, $arg: $argty)*) $(-> $ret)? {
-                [<$trait_name Base>]::$method(self $(, $arg)*)
+                $base_name::$method(self $(, $arg)*)
             }
         }
-        $crate::__devirt_define!{@blanket_bridge $trait_name, $($rest)*}
+        $crate::__devirt_define!{@blanket_bridge $base_name, $($rest)*}
     };
 
-    (@blanket_bridge $trait_name:ident,) => {};
+    (@blanket_bridge $base_name:ident,) => {};
 
     // ── @inherent_decl ──────────────────────────────────────────────────────
     //
