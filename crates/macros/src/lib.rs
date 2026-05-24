@@ -498,11 +498,15 @@ fn build_base_bridge_items(
                 })
             }
             syn::TraitItem::Fn(m) => {
+                let cfg_attrs: Vec<_> = m.attrs.iter()
+                    .filter(|a| a.path().is_ident("cfg"))
+                    .collect();
                 let method_name = &m.sig.ident;
                 let spec_name = format_ident!("__spec_{method_name}");
                 let (mut bridge_sig, arg_names) = rewrite_sig_with_named_args(&m.sig);
                 bridge_sig.ident = spec_name;
                 Some(quote! {
+                    #(#cfg_attrs)*
                     #[inline(always)]
                     #bridge_sig {
                         <Self as #base_name #trait_ty_generics>::#method_name(self, #(#arg_names),*)
