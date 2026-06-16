@@ -4,7 +4,7 @@ struct Hot {
 
 devirt::__devirt_define! {
     @trait []
-    pub Checked [Hot] {
+    pub Checked CheckedBase [Hot] {
         /// Computes the value.
         #[must_use]
         fn compute(&self) -> f64;
