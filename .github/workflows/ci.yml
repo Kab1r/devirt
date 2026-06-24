@@ -112,7 +112,7 @@ jobs:
           toolchain="${toolchain%-x86_64-unknown-linux-gnu}"
           echo "toolchain=$toolchain" >> "$GITHUB_OUTPUT"
       - name: Install Rust toolchain required by Verus
-        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
+        uses: dtolnay/rust-toolchain@67ef31d5b988238dd797d409d6f9574278e20537 # master
         with:
           toolchain: ${{ steps.verus-toolchain.outputs.toolchain }}
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
