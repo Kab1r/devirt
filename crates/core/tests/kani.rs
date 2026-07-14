@@ -26,7 +26,7 @@ mod n1 {
 
     devirt::__devirt_define! {
         @trait []
-        pub Trait1 [Hot] {
+        pub Trait1 Trait1Base [Hot] {
             fn compute(&self, x: u64) -> u64;
             fn notify(&self, x: u64);
             fn transform(&mut self, x: u64) -> u64;
@@ -122,7 +122,7 @@ mod n2 {
 
     devirt::__devirt_define! {
         @trait []
-        pub Trait2 [HotA, HotB] {
+        pub Trait2 Trait2Base [HotA, HotB] {
             fn compute(&self, x: u64) -> u64;
             fn notify(&self, x: u64);
             fn transform(&mut self, x: u64) -> u64;
@@ -257,7 +257,7 @@ mod n3 {
 
     devirt::__devirt_define! {
         @trait []
-        pub Trait3 [HotA, HotB, HotC] {
+        pub Trait3 Trait3Base [HotA, HotB, HotC] {
             fn compute(&self, x: u64) -> u64;
             fn notify(&self, x: u64);
             fn transform(&mut self, x: u64) -> u64;
@@ -405,7 +405,7 @@ mod vt {
 
     devirt::__devirt_define! {
         @trait []
-        pub TraitVt [Hot] {
+        pub TraitVt TraitVtBase [Hot] {
             fn compute(&self, x: u64) -> u64;
         }
     }

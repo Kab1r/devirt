@@ -8,7 +8,7 @@ struct ColdType {
 
 devirt::__devirt_define! {
     @trait []
-    pub AllArms [Hot] {
+    pub AllArms AllArmsBase [Hot] {
         fn ref_nonvoid(&self, x: f64) -> f64;
         fn ref_void(&self, x: f64);
         fn mut_nonvoid(&mut self, x: f64) -> f64;

@@ -5,7 +5,7 @@ struct Inner {
 devirt::__devirt_define! {
     @trait []
     /// A public trait with documentation.
-    pub DocTrait [Inner] {
+    pub DocTrait DocTraitBase [Inner] {
         /// Returns the inner value.
         fn get(&self) -> i32;
     }

@@ -4,7 +4,7 @@ struct C;
 
 devirt::__devirt_define! {
     @trait []
-    pub MultiHot [A, B, C] {
+    pub MultiHot MultiHotBase [A, B, C] {
         fn id(&self) -> u8;
     }
 }

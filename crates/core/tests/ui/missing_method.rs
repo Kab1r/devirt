@@ -2,7 +2,7 @@ struct Foo;
 
 devirt::__devirt_define! {
     @trait []
-    pub TwoMethods [Foo] {
+    pub TwoMethods TwoMethodsBase [Foo] {
         fn first(&self) -> i32;
         fn second(&self) -> i32;
     }

@@ -78,10 +78,14 @@ There are two independent expansion paths:
 
 For a trait `Foo` with hot types `[A, B]`:
 1. Generates hidden inner trait `__FooImpl` with `__spec_*` method declarations.
-2. Generates a compile-time assertion that `size_of::<*const dyn Foo>() == 2 * size_of::<usize>()`.
-3. Generates `impl<'a> dyn Foo + 'a { ... }` with two primitive helpers — `__devirt_raw_parts(&Self) -> [usize; 2]` and `__devirt_vtable_for::<T: __FooImpl + 'static>() -> usize` — plus inherent methods for each user-declared trait method whose body is the vtable-comparison dispatch shim.
-4. Generates public marker trait `Foo: __FooImpl` (no methods of its own).
-5. Blanket impl: `impl<T: __FooImpl + ?Sized> Foo for T {}`.
+2. Generates public base trait `FooBase` with the original method signatures (including default bodies). Cold types implement this directly without depending on `devirt`.
+3. Generates blanket impl `impl<T: FooBase + ?Sized> __FooImpl for T { ... }` bridging base trait methods to `__spec_*` via `#[inline(always)]` delegation.
+4. Generates a compile-time assertion that `size_of::<*const dyn Foo>() == 2 * size_of::<usize>()`.
+5. Generates `impl<'a> dyn Foo + 'a { ... }` with two primitive helpers — `__devirt_raw_parts(&Self) -> [usize; 2]` and `__devirt_vtable_for::<T: __FooImpl + 'static>() -> usize` — plus inherent methods for each user-declared trait method whose body is the vtable-comparison dispatch shim.
+6. Generates public marker trait `Foo: __FooImpl` (no methods of its own).
+7. Blanket impl: `impl<T: __FooImpl + ?Sized> Foo for T {}`.
+
+Hot types use `#[devirt]` on impl blocks → generates `impl __FooImpl for T` directly (bypasses the base blanket, enables `#[inline]`). Cold types implement `FooBase` → blanket provides `__FooImpl` → blanket provides `Foo`.
 
 ### `__devirt_define! { @impl ... }` Expansion
 

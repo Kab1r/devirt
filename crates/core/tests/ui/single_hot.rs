@@ -4,7 +4,7 @@ struct Foo {
 
 devirt::__devirt_define! {
     @trait []
-    pub SingleHot [Foo] {
+    pub SingleHot SingleHotBase [Foo] {
         fn get(&self) -> f64;
     }
 }

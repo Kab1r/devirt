@@ -8,7 +8,7 @@ struct Cold {
 
 devirt::__devirt_define! {
     @trait [unsafe]
-    pub Trusted [Hot] {
+    pub Trusted TrustedBase [Hot] {
         fn verify(&self) -> bool;
     }
 }

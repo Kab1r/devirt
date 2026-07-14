@@ -2,7 +2,7 @@ struct Bar;
 
 devirt::__devirt_define! {
     @trait []
-    pub WrongSig [Bar] {
+    pub WrongSig WrongSigBase [Bar] {
         fn compute(&self, x: f64) -> f64;
     }
 }

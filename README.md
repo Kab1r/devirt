@@ -27,6 +27,7 @@ use std::f64::consts::PI;
 struct Circle { radius: f64 }
 struct Rect { w: f64, h: f64 }
 struct Triangle { a: f64, b: f64, c: f64 }
+struct Hexagon { side: f64 }
 
 // 1. Define trait — list hot types in the attribute
 #[devirt::devirt(Circle, Rect)]
@@ -36,7 +37,7 @@ pub trait Shape {
     fn scale(&mut self, factor: f64);
 }
 
-// 2. Hot type — vtable-cmp match, direct inlined call
+// 2. Hot type — #[devirt] generates optimized direct dispatch
 #[devirt::devirt]
 impl Shape for Circle {
     fn area(&self) -> f64 { PI * self.radius * self.radius }
@@ -51,7 +52,7 @@ impl Shape for Rect {
     fn scale(&mut self, factor: f64) { self.w *= factor; self.h *= factor; }
 }
 
-// 3. Cold type — falls back to vtable
+// 3a. Cold type via #[devirt] — also works, adds #[inline]
 #[devirt::devirt]
 impl Shape for Triangle {
     fn area(&self) -> f64 {
@@ -64,7 +65,14 @@ impl Shape for Triangle {
     }
 }
 
-// 4. Use — completely normal dyn Trait
+// 3b. Cold type via ShapeBase — no devirt dependency needed
+impl ShapeBase for Hexagon {
+    fn area(&self) -> f64 { 1.5 * 3f64.sqrt() * self.side * self.side }
+    fn perimeter(&self) -> f64 { 6.0 * self.side }
+    fn scale(&mut self, factor: f64) { self.side *= factor; }
+}
+
+// 4. Use — completely normal dyn Trait. Both cold types work identically.
 fn total_area(shapes: &[Box<dyn Shape>]) -> f64 {
     shapes.iter().map(|s| s.area()).sum()
 }
@@ -101,6 +109,24 @@ devirt::devirt! {
 ```
 
 Both APIs produce identical expanded code.
+
+### Implementing from downstream crates
+
+The trait definition generates a public `{Trait}Base` trait (e.g.,
+`ShapeBase`) with the original method signatures. Downstream crates
+can implement this trait directly — no `devirt` dependency required:
+
+```rust
+// In a downstream crate — no devirt in Cargo.toml
+impl my_shapes::ShapeBase for MyWidget {
+    fn area(&self) -> f64 { self.w * self.h }
+    fn perimeter(&self) -> f64 { 2.0 * (self.w + self.h) }
+    fn scale(&mut self, factor: f64) { self.w *= factor; self.h *= factor; }
+}
+
+// MyWidget now satisfies the Shape bound:
+let shapes: Vec<Box<dyn my_shapes::Shape>> = vec![Box::new(MyWidget { w: 3.0, h: 4.0 })];
+```
 
 ### `dyn Trait + Send` / `Sync`
 

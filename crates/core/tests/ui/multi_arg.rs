@@ -5,7 +5,7 @@ struct Widget {
 
 devirt::__devirt_define! {
     @trait []
-    pub MultiArg [Widget] {
+    pub MultiArg MultiArgBase [Widget] {
         fn add(&self, a: f64, b: f64) -> f64;
         fn set(&mut self, a: f64, b: f64);
     }
