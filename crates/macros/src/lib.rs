@@ -693,18 +693,121 @@ fn build_base_trait_expansion(
     }
 }
 
-fn build_existing_base_trait_expansion(
-    trait_item: &syn::ItemTrait,
-    unsafety: Option<&syn::token::Unsafe>,
+struct TraitExpansion<'a> {
+    trait_item: &'a syn::ItemTrait,
+    args: &'a TraitArgs,
+    public_name: &'a syn::Ident,
+    inner_name: syn::Ident,
     has_trait_generics: bool,
-    base_name: &syn::Ident,
-    inner_name: &syn::Ident,
+    trait_generic_params: &'a Punctuated<syn::GenericParam, Token![,]>,
+    trait_ty_generics: syn::TypeGenerics<'a>,
+    trait_where_clause: Option<&'a syn::WhereClause>,
+    assoc_info: AssocTypeInfo,
+    trait_dyn_ref: proc_macro2::TokenStream,
+    inner_supers: proc_macro2::TokenStream,
+    public_supers: proc_macro2::TokenStream,
+    inherent_impl_generics: proc_macro2::TokenStream,
+    trait_def_generics: proc_macro2::TokenStream,
+}
+
+impl<'a> TraitExpansion<'a> {
+    fn new(trait_item: &'a syn::ItemTrait, args: &'a TraitArgs) -> Self {
+        let name = &trait_item.ident;
+        let public_name = args.devirt_name.as_ref().unwrap_or(name);
+        let inner_name = format_ident!("__{public_name}Impl");
+        let has_trait_generics = !trait_item.generics.params.is_empty();
+        let trait_generic_params = &trait_item.generics.params;
+        let trait_where_clause = trait_item.generics.where_clause.as_ref();
+        let (_, trait_ty_generics, _) = trait_item.generics.split_for_impl();
+        let assoc_info = collect_assoc_types(trait_item);
+        let trait_dyn_ref = build_trait_dyn_ref(
+            public_name,
+            trait_generic_params,
+            &assoc_info.idents,
+            &assoc_info.generics,
+        );
+        let supertraits = &trait_item.supertraits;
+        let inner_supers = if supertraits.is_empty() {
+            quote! {}
+        } else {
+            quote! { : #supertraits }
+        };
+        let public_supers = if supertraits.is_empty() {
+            quote! { #inner_name #trait_ty_generics }
+        } else {
+            quote! { #inner_name #trait_ty_generics + #supertraits }
+        };
+        let inherent_impl_generics =
+            build_inherent_impl_generics(trait_generic_params, &assoc_info.generics);
+        let trait_def_generics = if has_trait_generics {
+            quote! { <#trait_generic_params> }
+        } else {
+            quote! {}
+        };
+
+        Self {
+            trait_item,
+            args,
+            public_name,
+            inner_name,
+            has_trait_generics,
+            trait_generic_params,
+            trait_ty_generics,
+            trait_where_clause,
+            assoc_info,
+            trait_dyn_ref,
+            inner_supers,
+            public_supers,
+            inherent_impl_generics,
+            trait_def_generics,
+        }
+    }
+
+    fn base_trait_name(&self) -> syn::Ident {
+        self.args
+            .base_name
+            .clone()
+            .unwrap_or_else(|| format_ident!("{}Base", self.trait_item.ident))
+    }
+
+    fn public_attrs(&self) -> proc_macro2::TokenStream {
+        if self.args.devirt_name.is_some() {
+            quote! {}
+        } else {
+            let outer_attrs = &self.trait_item.attrs;
+            quote! { #(#outer_attrs)* }
+        }
+    }
+}
+
+fn build_inherent_impl_generics(
     trait_generic_params: &Punctuated<syn::GenericParam, Token![,]>,
-    trait_ty_generics: &syn::TypeGenerics<'_>,
-    trait_where_clause: Option<&syn::WhereClause>,
+    assoc_generics: &[syn::Ident],
 ) -> proc_macro2::TokenStream {
+    let mut extra_params: Vec<proc_macro2::TokenStream> = Vec::new();
+    for param in trait_generic_params {
+        extra_params.push(quote! { #param });
+    }
+    for gp in assoc_generics {
+        extra_params.push(quote! { #gp });
+    }
+    if extra_params.is_empty() {
+        quote! { <'__devirt> }
+    } else {
+        quote! { <'__devirt, #(#extra_params),*> }
+    }
+}
+
+fn build_existing_base_trait_expansion(ctx: &TraitExpansion<'_>) -> proc_macro2::TokenStream {
+    let trait_item = ctx.trait_item;
+    let base_name = &ctx.trait_item.ident;
+    let inner_name = &ctx.inner_name;
+    let trait_ty_generics = &ctx.trait_ty_generics;
     let base_bridge_items = build_base_bridge_items(trait_item, base_name, trait_ty_generics);
-    let base_blanket = if has_trait_generics {
+    let unsafety = ctx.trait_item.unsafety.as_ref();
+    let trait_generic_params = ctx.trait_generic_params;
+    let trait_where_clause = ctx.trait_where_clause;
+    let base_blanket = if ctx.has_trait_generics {
         quote! {
             #unsafety impl<
                 __DevirtT: #base_name #trait_ty_generics + ?Sized,
@@ -729,124 +832,74 @@ fn build_existing_base_trait_expansion(
     }
 }
 
+fn build_configured_base_trait_expansion(ctx: &TraitExpansion<'_>) -> proc_macro2::TokenStream {
+    let base_name = ctx.base_trait_name();
+    build_base_trait_expansion(
+        ctx.trait_item,
+        ctx.trait_item.unsafety.as_ref(),
+        ctx.has_trait_generics,
+        &base_name,
+        &ctx.inner_name,
+        ctx.trait_generic_params,
+        &ctx.trait_ty_generics,
+        ctx.trait_where_clause,
+        &ctx.inner_supers,
+    )
+}
+
+fn build_base_expansion(ctx: &TraitExpansion<'_>) -> proc_macro2::TokenStream {
+    if ctx.args.devirt_name.is_some() {
+        build_existing_base_trait_expansion(ctx)
+    } else {
+        build_configured_base_trait_expansion(ctx)
+    }
+}
+
 fn emit_trait_expansion(trait_item: &syn::ItemTrait, args: &TraitArgs) -> TokenStream {
-    let unsafety = &trait_item.unsafety;
-    let vis = &trait_item.vis;
-    let name = &trait_item.ident;
-    let outer_attrs = &trait_item.attrs;
-    let supertraits = &trait_item.supertraits;
-    let public_name = args.devirt_name.as_ref().unwrap_or(name);
-    let inner_name = format_ident!("__{public_name}Impl");
-
-    // ── Trait-level generics ──────────────────────────────────────
-    let has_trait_generics = !trait_item.generics.params.is_empty();
-    let trait_generic_params = &trait_item.generics.params;
-    let trait_where_clause = &trait_item.generics.where_clause;
-    let (_, trait_ty_generics, _) = trait_item.generics.split_for_impl();
-
-    let assoc_info = collect_assoc_types(trait_item);
-    let can_devirt = !has_trait_generics;
-
-    let trait_dyn_ref = build_trait_dyn_ref(
-        public_name,
-        trait_generic_params,
-        &assoc_info.idents,
-        &assoc_info.generics,
-    );
-    let spec_decls = generate_spec_decls(trait_item);
+    let ctx = TraitExpansion::new(trait_item, args);
+    let unsafety = &ctx.trait_item.unsafety;
+    let vis = &ctx.trait_item.vis;
+    let can_devirt = !ctx.has_trait_generics;
+    let spec_decls = generate_spec_decls(ctx.trait_item);
     let dispatch_methods = build_dispatch_methods(
-        trait_item,
+        ctx.trait_item,
         can_devirt,
-        &assoc_info,
-        &inner_name,
-        &trait_dyn_ref,
-        &args.hot_types,
+        &ctx.assoc_info,
+        &ctx.inner_name,
+        &ctx.trait_dyn_ref,
+        &ctx.args.hot_types,
     );
     let delegating_methods =
-        build_delegating_methods(trait_item, &trait_dyn_ref, &assoc_info.rewrites);
-
-    let inner_supers = if supertraits.is_empty() {
-        quote! {}
-    } else {
-        quote! { : #supertraits }
-    };
-    let public_supers = if supertraits.is_empty() {
-        quote! { #inner_name #trait_ty_generics }
-    } else {
-        quote! { #inner_name #trait_ty_generics + #supertraits }
-    };
-
-    let mut extra_params: Vec<proc_macro2::TokenStream> = Vec::new();
-    for param in trait_generic_params {
-        extra_params.push(quote! { #param });
-    }
-    for gp in &assoc_info.generics {
-        extra_params.push(quote! { #gp });
-    }
-    let inherent_impl_generics = if extra_params.is_empty() {
-        quote! { <'__devirt> }
-    } else {
-        quote! { <'__devirt, #(#extra_params),*> }
-    };
-    let trait_def_generics = if has_trait_generics {
-        quote! { <#trait_generic_params> }
-    } else {
-        quote! {}
-    };
-
-    let fat_ptr_assertion = build_fat_ptr_assertion(trait_item, public_name);
+        build_delegating_methods(ctx.trait_item, &ctx.trait_dyn_ref, &ctx.assoc_info.rewrites);
+    let fat_ptr_assertion = build_fat_ptr_assertion(ctx.trait_item, ctx.public_name);
     let vtable_helpers = build_vtable_helpers(
         can_devirt,
-        public_name,
-        &inner_name,
-        &inherent_impl_generics,
-        &trait_dyn_ref,
-        &assoc_info.idents,
+        ctx.public_name,
+        &ctx.inner_name,
+        &ctx.inherent_impl_generics,
+        &ctx.trait_dyn_ref,
+        &ctx.assoc_info.idents,
     );
     let blanket_impl = build_blanket_impl(
         unsafety.as_ref(),
-        has_trait_generics,
-        public_name,
-        &inner_name,
-        trait_generic_params,
-        &trait_ty_generics,
-        trait_where_clause.as_ref(),
+        ctx.has_trait_generics,
+        ctx.public_name,
+        &ctx.inner_name,
+        ctx.trait_generic_params,
+        &ctx.trait_ty_generics,
+        ctx.trait_where_clause,
     );
-    let assoc_type_decls = &assoc_info.decls;
-
-    let base_expansion = if args.devirt_name.is_some() {
-        build_existing_base_trait_expansion(
-            trait_item,
-            unsafety.as_ref(),
-            has_trait_generics,
-            name,
-            &inner_name,
-            trait_generic_params,
-            &trait_ty_generics,
-            trait_where_clause.as_ref(),
-        )
-    } else {
-        let base_name = args
-            .base_name
-            .clone()
-            .unwrap_or_else(|| format_ident!("{name}Base"));
-        build_base_trait_expansion(
-            trait_item,
-            unsafety.as_ref(),
-            has_trait_generics,
-            &base_name,
-            &inner_name,
-            trait_generic_params,
-            &trait_ty_generics,
-            trait_where_clause.as_ref(),
-            &inner_supers,
-        )
-    };
-    let public_attrs = if args.devirt_name.is_some() {
-        quote! {}
-    } else {
-        quote! { #(#outer_attrs)* }
-    };
+    let assoc_type_decls = &ctx.assoc_info.decls;
+    let base_expansion = build_base_expansion(&ctx);
+    let public_attrs = ctx.public_attrs();
+    let inner_name = &ctx.inner_name;
+    let trait_def_generics = &ctx.trait_def_generics;
+    let inner_supers = &ctx.inner_supers;
+    let trait_where_clause = ctx.trait_where_clause;
+    let inherent_impl_generics = &ctx.inherent_impl_generics;
+    let trait_dyn_ref = &ctx.trait_dyn_ref;
+    let public_name = ctx.public_name;
+    let public_supers = &ctx.public_supers;
 
     quote! {
         #[doc(hidden)]
