@@ -22,6 +22,8 @@ fn ui_attr() {
     t.pass("tests/ui_attr/attr_assoc_type.rs");
     t.pass("tests/ui_attr/attr_assoc_default.rs");
     t.pass("tests/ui_attr/attr_generic_trait.rs");
+    t.pass("tests/ui_attr/attr_custom_base_name.rs");
+    t.pass("tests/ui_attr/attr_devirt_trait_name.rs");
     t.compile_fail("tests/ui_attr/attr_must_use_unused.rs");
     t.compile_fail("tests/ui_attr/attr_missing_args.rs");
     t.compile_fail("tests/ui_attr/attr_unsafe_missing_on_impl.rs");

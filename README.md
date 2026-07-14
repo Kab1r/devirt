@@ -112,9 +112,10 @@ Both APIs produce identical expanded code.
 
 ### Implementing from downstream crates
 
-The trait definition generates a public `{Trait}Base` trait (e.g.,
-`ShapeBase`) with the original method signatures. Downstream crates
-can implement this trait directly — no `devirt` dependency required:
+By default, the trait definition generates a public `{Trait}Base` trait
+(e.g., `ShapeBase`) with the original method signatures. Downstream
+crates can implement this trait directly — no `devirt` dependency
+required:
 
 ```rust
 // In a downstream crate — no devirt in Cargo.toml
@@ -127,6 +128,42 @@ impl my_shapes::ShapeBase for MyWidget {
 // MyWidget now satisfies the Shape bound:
 let shapes: Vec<Box<dyn my_shapes::Shape>> = vec![Box::new(MyWidget { w: 3.0, h: 4.0 })];
 ```
+
+You can choose a different base trait name while keeping `dyn Shape`
+as the devirtualized caller-facing trait:
+
+```rust
+#[devirt::devirt(Circle, Rect, base = ShapeImpl)]
+pub trait Shape {
+    fn area(&self) -> f64;
+}
+
+impl ShapeImpl for Hexagon {
+    fn area(&self) -> f64 { 1.5 * 3f64.sqrt() * self.side * self.side }
+}
+```
+
+If you prefer implementation transparency over caller transparency,
+generate the devirtualized trait under a separate name:
+
+```rust
+#[devirt::devirt(Circle, Rect, devirt = ShapeDevirt)]
+pub trait Shape {
+    fn area(&self) -> f64;
+}
+
+impl Shape for Hexagon {
+    fn area(&self) -> f64 { 1.5 * 3f64.sqrt() * self.side * self.side }
+}
+
+fn total_area(shapes: &[Box<dyn ShapeDevirt>]) -> f64 {
+    shapes.iter().map(|s| s.area()).sum()
+}
+```
+
+In this mode, cold and hot types implement the original `Shape` trait
+normally. Callers opt into devirtualized dispatch by using
+`dyn ShapeDevirt`; `dyn Shape` remains ordinary vtable dispatch.
 
 ### `dyn Trait + Send` / `Sync`
 

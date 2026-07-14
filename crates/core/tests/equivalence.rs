@@ -54,18 +54,32 @@ mod attr {
 
     #[devirt::devirt]
     impl T for Hot {
-        fn get(&self) -> u64 { self.val }
-        fn notify(&self, _x: u64) { }
-        fn transform(&mut self, x: u64) -> u64 { self.val = self.val.wrapping_add(x); self.val }
-        fn reset(&mut self, x: u64) { self.val = x; }
+        fn get(&self) -> u64 {
+            self.val
+        }
+        fn notify(&self, _x: u64) {}
+        fn transform(&mut self, x: u64) -> u64 {
+            self.val = self.val.wrapping_add(x);
+            self.val
+        }
+        fn reset(&mut self, x: u64) {
+            self.val = x;
+        }
     }
 
     #[devirt::devirt]
     impl T for Cold {
-        fn get(&self) -> u64 { self.val + 1 }
-        fn notify(&self, _x: u64) { }
-        fn transform(&mut self, x: u64) -> u64 { self.val = self.val.wrapping_sub(x); self.val }
-        fn reset(&mut self, x: u64) { self.val = x.wrapping_add(1); }
+        fn get(&self) -> u64 {
+            self.val + 1
+        }
+        fn notify(&self, _x: u64) {}
+        fn transform(&mut self, x: u64) -> u64 {
+            self.val = self.val.wrapping_sub(x);
+            self.val
+        }
+        fn reset(&mut self, x: u64) {
+            self.val = x.wrapping_add(1);
+        }
     }
 }
 
@@ -375,12 +389,18 @@ fn attr_generic_impl_dispatch() {
     assert_eq!((&h as &dyn Scale).area(), 10);
 
     // Scaled<GHot> — cold outer, hot inner
-    let s = Scaled { inner: GHot { val: 5 }, factor: 3 };
+    let s = Scaled {
+        inner: GHot { val: 5 },
+        factor: 3,
+    };
     assert_eq!((&s as &dyn Scale).area(), 15);
 
     // Scaled<Scaled<GHot>> — nested generic
     let ss = Scaled {
-        inner: Scaled { inner: GHot { val: 2 }, factor: 4 },
+        inner: Scaled {
+            inner: GHot { val: 2 },
+            factor: 4,
+        },
         factor: 5,
     };
     assert_eq!((&ss as &dyn Scale).area(), 40);
@@ -388,7 +408,10 @@ fn attr_generic_impl_dispatch() {
     // Pair with where clause
     let p = Pair {
         a: GHot { val: 3 },
-        b: Scaled { inner: GHot { val: 2 }, factor: 4 },
+        b: Scaled {
+            inner: GHot { val: 2 },
+            factor: 4,
+        },
     };
     assert_eq!((&p as &dyn Scale).area(), 3 + 8);
 
@@ -426,16 +449,28 @@ mod attr_extended {
 
     #[devirt::devirt]
     impl Inspectable for ExtHot {
-        fn value(&self) -> u64 { self.val }
-        fn name(&self) -> &str { &self.label }
-        fn set_val(&mut self, v: u64) { self.val = v; }
+        fn value(&self) -> u64 {
+            self.val
+        }
+        fn name(&self) -> &str {
+            &self.label
+        }
+        fn set_val(&mut self, v: u64) {
+            self.val = v;
+        }
     }
 
     #[devirt::devirt]
     impl Inspectable for ExtCold {
-        fn value(&self) -> u64 { self.val + 1 }
-        fn name(&self) -> &str { &self.label }
-        fn set_val(&mut self, v: u64) { self.val = v + 1; }
+        fn value(&self) -> u64 {
+            self.val + 1
+        }
+        fn name(&self) -> &str {
+            &self.label
+        }
+        fn set_val(&mut self, v: u64) {
+            self.val = v + 1;
+        }
     }
 }
 
@@ -445,8 +480,14 @@ fn attr_extended_dispatch() {
     use attr_extended::{ExtCold, ExtHot, Inspectable};
 
     // Supertraits: dyn Inspectable implements Debug
-    let h = ExtHot { val: 42, label: "hot".into() };
-    let c = ExtCold { val: 42, label: "cold".into() };
+    let h = ExtHot {
+        val: 42,
+        label: "hot".into(),
+    };
+    let c = ExtCold {
+        val: 42,
+        label: "cold".into(),
+    };
     drop(format!("{:?}", &h as &dyn Inspectable));
 
     // #[must_use] + non-void &self
@@ -458,8 +499,14 @@ fn attr_extended_dispatch() {
     assert_eq!((&c as &dyn Inspectable).name(), "cold");
 
     // &mut self
-    let mut h = ExtHot { val: 0, label: "hot".into() };
-    let mut c = ExtCold { val: 0, label: "cold".into() };
+    let mut h = ExtHot {
+        val: 0,
+        label: "hot".into(),
+    };
+    let mut c = ExtCold {
+        val: 0,
+        label: "cold".into(),
+    };
     (&mut h as &mut dyn Inspectable).set_val(10);
     (&mut c as &mut dyn Inspectable).set_val(10);
     assert_eq!(h.val, 10);
@@ -509,15 +556,23 @@ mod attr_assoc_types {
     #[devirt::devirt]
     impl Drawable for Circle {
         type Color = String;
-        fn name(&self) -> &str { "circle" }
-        fn draw(&self, color: String) -> String { format!("circle: {color}") }
+        fn name(&self) -> &str {
+            "circle"
+        }
+        fn draw(&self, color: String) -> String {
+            format!("circle: {color}")
+        }
     }
 
     #[devirt::devirt]
     impl Drawable for Rect {
         type Color = u32;
-        fn name(&self) -> &str { "rect" }
-        fn draw(&self, color: u32) -> String { format!("rect: #{color:06x}") }
+        fn name(&self) -> &str {
+            "rect"
+        }
+        fn draw(&self, color: u32) -> String {
+            format!("rect: #{color:06x}")
+        }
     }
 }
 
@@ -561,14 +616,22 @@ mod attr_generic_trait {
 
     #[devirt::devirt]
     impl Processor<String> for Handler {
-        fn process(&self, input: String) -> String { format!("str: {input}") }
-        fn name(&self) -> &str { "handler" }
+        fn process(&self, input: String) -> String {
+            format!("str: {input}")
+        }
+        fn name(&self) -> &str {
+            "handler"
+        }
     }
 
     #[devirt::devirt]
     impl Processor<u32> for Handler {
-        fn process(&self, input: u32) -> String { format!("num: {input}") }
-        fn name(&self) -> &str { "handler" }
+        fn process(&self, input: u32) -> String {
+            format!("num: {input}")
+        }
+        fn name(&self) -> &str {
+            "handler"
+        }
     }
 }
 
@@ -582,16 +645,121 @@ fn attr_generic_trait_dispatch() {
         (&h as &dyn Processor<String>).process("hello".into()),
         "str: hello"
     );
-    assert_eq!(
-        (&h as &dyn Processor<u32>).process(42),
-        "num: 42"
-    );
-    assert_eq!(
-        (&h as &(dyn Processor<String> + Send)).name(),
-        "handler"
-    );
+    assert_eq!((&h as &dyn Processor<u32>).process(42), "num: 42");
+    assert_eq!((&h as &(dyn Processor<String> + Send)).name(), "handler");
     assert_eq!(
         (&h as &(dyn Processor<u32> + Send + Sync)).name(),
         "handler"
     );
+}
+
+// ── Configurable generated trait names ────────────────────────────────────
+
+#[cfg(feature = "macros")]
+mod attr_named_base {
+    pub struct Hot {
+        pub val: u64,
+    }
+
+    pub struct Cold {
+        pub val: u64,
+    }
+
+    #[devirt::devirt(Hot, base = DispatchBase)]
+    pub trait Dispatch {
+        fn get(&self) -> u64;
+        fn reset(&mut self, value: u64);
+    }
+
+    #[devirt::devirt]
+    impl Dispatch for Hot {
+        fn get(&self) -> u64 {
+            self.val
+        }
+        fn reset(&mut self, value: u64) {
+            self.val = value;
+        }
+    }
+
+    impl DispatchBase for Cold {
+        fn get(&self) -> u64 {
+            self.val + 1
+        }
+        fn reset(&mut self, value: u64) {
+            self.val = value + 1;
+        }
+    }
+}
+
+#[cfg(feature = "macros")]
+#[test]
+fn attr_custom_base_name_dispatch() {
+    use attr_named_base::{Cold, Dispatch, Hot};
+
+    let hot = Hot { val: 10 };
+    let cold = Cold { val: 10 };
+    assert_eq!((&hot as &dyn Dispatch).get(), 10);
+    assert_eq!((&cold as &dyn Dispatch).get(), 11);
+
+    let mut hot = Hot { val: 0 };
+    let mut cold = Cold { val: 0 };
+    (&mut hot as &mut dyn Dispatch).reset(5);
+    (&mut cold as &mut dyn Dispatch).reset(5);
+    assert_eq!(hot.val, 5);
+    assert_eq!(cold.val, 6);
+}
+
+#[cfg(feature = "macros")]
+mod attr_named_devirt {
+    pub struct Hot {
+        pub val: u64,
+    }
+
+    pub struct Cold {
+        pub val: u64,
+    }
+
+    #[devirt::devirt(Hot, devirt = DispatchDevirt)]
+    pub trait Dispatch {
+        fn get(&self) -> u64;
+        fn reset(&mut self, value: u64);
+    }
+
+    impl Dispatch for Hot {
+        fn get(&self) -> u64 {
+            self.val
+        }
+        fn reset(&mut self, value: u64) {
+            self.val = value;
+        }
+    }
+
+    impl Dispatch for Cold {
+        fn get(&self) -> u64 {
+            self.val + 1
+        }
+        fn reset(&mut self, value: u64) {
+            self.val = value + 1;
+        }
+    }
+}
+
+#[cfg(feature = "macros")]
+#[test]
+fn attr_devirt_trait_name_dispatch() {
+    use attr_named_devirt::{Cold, Dispatch, DispatchDevirt, Hot};
+
+    let hot = Hot { val: 10 };
+    let cold = Cold { val: 10 };
+    assert_eq!((&hot as &dyn Dispatch).get(), 10);
+    assert_eq!((&hot as &dyn DispatchDevirt).get(), 10);
+    assert_eq!((&hot as &(dyn DispatchDevirt + Send)).get(), 10);
+    assert_eq!((&cold as &dyn DispatchDevirt).get(), 11);
+
+    let mut hot = Hot { val: 0 };
+    let mut cold = Cold { val: 0 };
+    (&mut hot as &mut dyn DispatchDevirt).reset(5);
+    (&mut cold as &mut dyn DispatchDevirt).reset(5);
+    assert_eq!(hot.val, 5);
+    assert_eq!(cold.val, 6);
 }

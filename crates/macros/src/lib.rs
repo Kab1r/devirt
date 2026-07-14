@@ -9,6 +9,7 @@ use std::collections::{HashMap, HashSet};
 
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
+use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::visit::Visit;
 use syn::visit_mut::VisitMut;
@@ -24,6 +25,20 @@ use syn::{Token, parse_macro_input};
 ///     fn area(&self) -> f64;
 ///     fn scale(&mut self, factor: f64);
 /// }
+/// ```
+///
+/// Optional naming controls:
+///
+/// ```ignore
+/// // Keep `Shape` as the devirtualized trait, but call the cold
+/// // implementation trait `ShapeImpl` instead of `ShapeBase`.
+/// #[devirt::devirt(Circle, Rect, base = ShapeImpl)]
+/// pub trait Shape { ... }
+///
+/// // Keep `Shape` as the ordinary implementation trait, and generate
+/// // `ShapeDevirt` as the devirtualized `dyn` trait.
+/// #[devirt::devirt(Circle, Rect, devirt = ShapeDevirt)]
+/// pub trait Shape { ... }
 /// ```
 ///
 /// # On an impl block
@@ -68,12 +83,110 @@ fn expand_trait(attr: TokenStream, trait_item: &syn::ItemTrait) -> TokenStream {
         return e.to_compile_error().into();
     }
 
-    let hot_types: Vec<syn::Type> =
-        parse_macro_input!(attr with Punctuated::<syn::Type, Token![,]>::parse_terminated)
-            .into_iter()
-            .collect();
+    let args = parse_macro_input!(attr as TraitArgs);
+    if args.hot_types.is_empty() {
+        return syn::Error::new(
+            proc_macro2::Span::call_site(),
+            "expected at least one hot type",
+        )
+        .to_compile_error()
+        .into();
+    }
+    if args.base_name.is_some() && args.devirt_name.is_some() {
+        return syn::Error::new(
+            proc_macro2::Span::call_site(),
+            "`base = Name` cannot be combined with `devirt = Name`",
+        )
+        .to_compile_error()
+        .into();
+    }
+    if let Some(base_name) = &args.base_name
+        && base_name == &trait_item.ident
+    {
+        return syn::Error::new_spanned(
+            base_name,
+            "generated base trait name must differ from the annotated trait",
+        )
+        .to_compile_error()
+        .into();
+    }
+    if let Some(devirt_name) = &args.devirt_name
+        && devirt_name == &trait_item.ident
+    {
+        return syn::Error::new_spanned(
+            devirt_name,
+            "generated devirt trait name must differ from the annotated trait",
+        )
+        .to_compile_error()
+        .into();
+    }
 
-    emit_trait_expansion(trait_item, &hot_types)
+    emit_trait_expansion(trait_item, &args)
+}
+
+struct TraitArgs {
+    hot_types: Vec<syn::Type>,
+    base_name: Option<syn::Ident>,
+    devirt_name: Option<syn::Ident>,
+}
+
+impl Parse for TraitArgs {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let mut hot_types = Vec::new();
+        let mut base_name = None;
+        let mut devirt_name = None;
+
+        while !input.is_empty() {
+            if input.peek(syn::Ident) {
+                let fork = input.fork();
+                let _: syn::Ident = fork.parse()?;
+                if fork.peek(Token![=]) {
+                    let key: syn::Ident = input.parse()?;
+                    input.parse::<Token![=]>()?;
+                    let value: syn::Ident = input.parse()?;
+                    match key.to_string().as_str() {
+                        "base" => {
+                            if base_name.replace(value).is_some() {
+                                return Err(syn::Error::new_spanned(
+                                    key,
+                                    "duplicate `base` option",
+                                ));
+                            }
+                        }
+                        "devirt" => {
+                            if devirt_name.replace(value).is_some() {
+                                return Err(syn::Error::new_spanned(
+                                    key,
+                                    "duplicate `devirt` option",
+                                ));
+                            }
+                        }
+                        _ => {
+                            return Err(syn::Error::new_spanned(
+                                key,
+                                "unknown #[devirt] option; expected `base` or `devirt`",
+                            ));
+                        }
+                    }
+                } else {
+                    hot_types.push(input.parse()?);
+                }
+            } else {
+                hot_types.push(input.parse()?);
+            }
+
+            if input.is_empty() {
+                break;
+            }
+            input.parse::<Token![,]>()?;
+        }
+
+        Ok(Self {
+            hot_types,
+            base_name,
+            devirt_name,
+        })
+    }
 }
 
 fn validate_trait(trait_item: &syn::ItemTrait) -> Result<(), syn::Error> {
@@ -156,8 +269,7 @@ fn collect_assoc_types(trait_item: &syn::ItemTrait) -> AssocTypeInfo {
         .collect();
     let names = items.iter().map(|t| t.ident.to_string()).collect();
     let idents: Vec<syn::Ident> = items.iter().map(|t| t.ident.clone()).collect();
-    let generics: Vec<syn::Ident> =
-        idents.iter().map(|id| format_ident!("__{id}")).collect();
+    let generics: Vec<syn::Ident> = idents.iter().map(|id| format_ident!("__{id}")).collect();
     let decls = items
         .iter()
         .map(|t| {
@@ -170,7 +282,13 @@ fn collect_assoc_types(trait_item: &syn::ItemTrait) -> AssocTypeInfo {
         .zip(generics.iter())
         .map(|(id, gp)| (id.to_string(), gp.clone()))
         .collect();
-    AssocTypeInfo { names, idents, generics, decls, rewrites }
+    AssocTypeInfo {
+        names,
+        idents,
+        generics,
+        decls,
+        rewrites,
+    }
 }
 
 fn build_trait_dyn_ref(
@@ -208,8 +326,8 @@ fn build_trait_dyn_ref(
 
 fn build_fat_ptr_assertion(
     trait_item: &syn::ItemTrait,
+    dyn_trait_name: &syn::Ident,
 ) -> proc_macro2::TokenStream {
-    let name = &trait_item.ident;
     let params = &trait_item.generics.params;
 
     let assoc_types: Vec<&syn::TraitItemType> = trait_item
@@ -227,7 +345,7 @@ fn build_fat_ptr_assertion(
     if params.is_empty() && assoc_types.is_empty() {
         return quote! {
             const _: () = assert!(
-                ::core::mem::size_of::<*const dyn #name>()
+                ::core::mem::size_of::<*const dyn #dyn_trait_name>()
                     == 2 * ::core::mem::size_of::<usize>()
             );
         };
@@ -295,7 +413,7 @@ fn build_fat_ptr_assertion(
         const _: () = {
             fn __devirt_assert<#(#fn_params),*>() #where_clause {
                 assert!(
-                    ::core::mem::size_of::<*const dyn #name<#(#dyn_args),*>>()
+                    ::core::mem::size_of::<*const dyn #dyn_trait_name<#(#dyn_args),*>>()
                         == 2 * ::core::mem::size_of::<usize>()
                 );
             }
@@ -431,13 +549,20 @@ fn build_dispatch_methods(
             let syn::TraitItem::Fn(m) = item else {
                 return None;
             };
-            let references_assoc =
-                method_references_assoc_types(&m.sig, &assoc_info.names);
+            let references_assoc = method_references_assoc_types(&m.sig, &assoc_info.names);
             if !can_devirt || references_assoc {
-                Some(generate_fallback_method(m, inner_name, &assoc_info.rewrites))
+                Some(generate_fallback_method(
+                    m,
+                    inner_name,
+                    &assoc_info.rewrites,
+                ))
             } else {
                 Some(generate_dispatch_method(
-                    m, trait_dyn_ref, inner_name, hot_types, &assoc_info.rewrites,
+                    m,
+                    trait_dyn_ref,
+                    inner_name,
+                    hot_types,
+                    &assoc_info.rewrites,
                 ))
             }
         })
@@ -461,9 +586,7 @@ fn build_delegating_methods(
         .collect()
 }
 
-fn build_base_trait_items(
-    trait_item: &syn::ItemTrait,
-) -> Vec<proc_macro2::TokenStream> {
+fn build_base_trait_items(trait_item: &syn::ItemTrait) -> Vec<proc_macro2::TokenStream> {
     trait_item
         .items
         .iter()
@@ -498,7 +621,9 @@ fn build_base_bridge_items(
                 })
             }
             syn::TraitItem::Fn(m) => {
-                let cfg_attrs: Vec<_> = m.attrs.iter()
+                let cfg_attrs: Vec<_> = m
+                    .attrs
+                    .iter()
                     .filter(|a| a.path().is_ident("cfg"))
                     .collect();
                 let method_name = &m.sig.ident;
@@ -568,16 +693,50 @@ fn build_base_trait_expansion(
     }
 }
 
-fn emit_trait_expansion(
+fn build_existing_base_trait_expansion(
     trait_item: &syn::ItemTrait,
-    hot_types: &[syn::Type],
-) -> TokenStream {
+    unsafety: Option<&syn::token::Unsafe>,
+    has_trait_generics: bool,
+    base_name: &syn::Ident,
+    inner_name: &syn::Ident,
+    trait_generic_params: &Punctuated<syn::GenericParam, Token![,]>,
+    trait_ty_generics: &syn::TypeGenerics<'_>,
+    trait_where_clause: Option<&syn::WhereClause>,
+) -> proc_macro2::TokenStream {
+    let base_bridge_items = build_base_bridge_items(trait_item, base_name, trait_ty_generics);
+    let base_blanket = if has_trait_generics {
+        quote! {
+            #unsafety impl<
+                __DevirtT: #base_name #trait_ty_generics + ?Sized,
+                #trait_generic_params
+            > #inner_name #trait_ty_generics for __DevirtT #trait_where_clause {
+                #(#base_bridge_items)*
+            }
+        }
+    } else {
+        quote! {
+            #unsafety impl<__DevirtT: #base_name + ?Sized>
+                #inner_name for __DevirtT #trait_where_clause
+            {
+                #(#base_bridge_items)*
+            }
+        }
+    };
+
+    quote! {
+        #trait_item
+        #base_blanket
+    }
+}
+
+fn emit_trait_expansion(trait_item: &syn::ItemTrait, args: &TraitArgs) -> TokenStream {
     let unsafety = &trait_item.unsafety;
     let vis = &trait_item.vis;
     let name = &trait_item.ident;
     let outer_attrs = &trait_item.attrs;
     let supertraits = &trait_item.supertraits;
-    let inner_name = format_ident!("__{name}Impl");
+    let public_name = args.devirt_name.as_ref().unwrap_or(name);
+    let inner_name = format_ident!("__{public_name}Impl");
 
     // ── Trait-level generics ──────────────────────────────────────
     let has_trait_generics = !trait_item.generics.params.is_empty();
@@ -589,18 +748,22 @@ fn emit_trait_expansion(
     let can_devirt = !has_trait_generics;
 
     let trait_dyn_ref = build_trait_dyn_ref(
-        name,
+        public_name,
         trait_generic_params,
         &assoc_info.idents,
         &assoc_info.generics,
     );
     let spec_decls = generate_spec_decls(trait_item);
     let dispatch_methods = build_dispatch_methods(
-        trait_item, can_devirt, &assoc_info, &inner_name, &trait_dyn_ref, hot_types,
+        trait_item,
+        can_devirt,
+        &assoc_info,
+        &inner_name,
+        &trait_dyn_ref,
+        &args.hot_types,
     );
-    let delegating_methods = build_delegating_methods(
-        trait_item, &trait_dyn_ref, &assoc_info.rewrites,
-    );
+    let delegating_methods =
+        build_delegating_methods(trait_item, &trait_dyn_ref, &assoc_info.rewrites);
 
     let inner_supers = if supertraits.is_empty() {
         quote! {}
@@ -631,23 +794,59 @@ fn emit_trait_expansion(
         quote! {}
     };
 
-    let fat_ptr_assertion = build_fat_ptr_assertion(trait_item);
+    let fat_ptr_assertion = build_fat_ptr_assertion(trait_item, public_name);
     let vtable_helpers = build_vtable_helpers(
-        can_devirt, name, &inner_name, &inherent_impl_generics,
-        &trait_dyn_ref, &assoc_info.idents,
+        can_devirt,
+        public_name,
+        &inner_name,
+        &inherent_impl_generics,
+        &trait_dyn_ref,
+        &assoc_info.idents,
     );
     let blanket_impl = build_blanket_impl(
-        unsafety.as_ref(), has_trait_generics, name, &inner_name,
-        trait_generic_params, &trait_ty_generics, trait_where_clause.as_ref(),
+        unsafety.as_ref(),
+        has_trait_generics,
+        public_name,
+        &inner_name,
+        trait_generic_params,
+        &trait_ty_generics,
+        trait_where_clause.as_ref(),
     );
     let assoc_type_decls = &assoc_info.decls;
 
-    let base_name = format_ident!("{name}Base");
-    let base_expansion = build_base_trait_expansion(
-        trait_item, unsafety.as_ref(), has_trait_generics, &base_name,
-        &inner_name, trait_generic_params, &trait_ty_generics,
-        trait_where_clause.as_ref(), &inner_supers,
-    );
+    let base_expansion = if args.devirt_name.is_some() {
+        build_existing_base_trait_expansion(
+            trait_item,
+            unsafety.as_ref(),
+            has_trait_generics,
+            name,
+            &inner_name,
+            trait_generic_params,
+            &trait_ty_generics,
+            trait_where_clause.as_ref(),
+        )
+    } else {
+        let base_name = args
+            .base_name
+            .clone()
+            .unwrap_or_else(|| format_ident!("{name}Base"));
+        build_base_trait_expansion(
+            trait_item,
+            unsafety.as_ref(),
+            has_trait_generics,
+            &base_name,
+            &inner_name,
+            trait_generic_params,
+            &trait_ty_generics,
+            trait_where_clause.as_ref(),
+            &inner_supers,
+        )
+    };
+    let public_attrs = if args.devirt_name.is_some() {
+        quote! {}
+    } else {
+        quote! { #(#outer_attrs)* }
+    };
 
     quote! {
         #[doc(hidden)]
@@ -675,8 +874,8 @@ fn emit_trait_expansion(
             + ::core::marker::Sync + '__devirt
         { #(#delegating_methods)* }
 
-        #(#outer_attrs)*
-        #vis #unsafety trait #name #trait_def_generics
+        #public_attrs
+        #vis #unsafety trait #public_name #trait_def_generics
             : #public_supers #trait_where_clause {}
         #blanket_impl
     }
@@ -691,9 +890,7 @@ fn emit_trait_expansion(
 /// Methods with a default body get the body rewritten so that
 /// `self.method()` calls become `self.__spec_method()`, then emitted
 /// as provided methods on the inner trait.
-fn generate_spec_decls(
-    trait_item: &syn::ItemTrait,
-) -> Vec<proc_macro2::TokenStream> {
+fn generate_spec_decls(trait_item: &syn::ItemTrait) -> Vec<proc_macro2::TokenStream> {
     let method_names: HashSet<String> = trait_item
         .items
         .iter()
@@ -738,9 +935,7 @@ fn generate_spec_decls(
 /// generated names so arguments can be forwarded.  Returns the
 /// rewritten signature and a list of argument identifiers (excluding
 /// `self`).
-fn rewrite_sig_with_named_args(
-    sig: &syn::Signature,
-) -> (syn::Signature, Vec<syn::Ident>) {
+fn rewrite_sig_with_named_args(sig: &syn::Signature) -> (syn::Signature, Vec<syn::Ident>) {
     let mut sig = sig.clone();
     let mut arg_names = Vec::new();
     for (idx, arg) in sig.inputs.iter_mut().enumerate() {
@@ -790,9 +985,7 @@ impl Visit<'_> for AssocTypeFinder<'_> {
     fn visit_path(&mut self, i: &syn::Path) {
         if i.segments.len() >= 2
             && i.segments[0].ident == "Self"
-            && self
-                .assoc_names
-                .contains(&i.segments[1].ident.to_string())
+            && self.assoc_names.contains(&i.segments[1].ident.to_string())
         {
             self.found = true;
         }
@@ -800,14 +993,14 @@ impl Visit<'_> for AssocTypeFinder<'_> {
     }
 }
 
-fn method_references_assoc_types(
-    sig: &syn::Signature,
-    assoc_names: &HashSet<String>,
-) -> bool {
+fn method_references_assoc_types(sig: &syn::Signature, assoc_names: &HashSet<String>) -> bool {
     if assoc_names.is_empty() {
         return false;
     }
-    let mut finder = AssocTypeFinder { assoc_names, found: false };
+    let mut finder = AssocTypeFinder {
+        assoc_names,
+        found: false,
+    };
     syn::visit::visit_signature(&mut finder, sig);
     finder.found
 }
@@ -819,13 +1012,10 @@ struct RewriteSelfAssocTypes {
 impl VisitMut for RewriteSelfAssocTypes {
     fn visit_path_mut(&mut self, i: &mut syn::Path) {
         syn::visit_mut::visit_path_mut(self, i);
-        if i.segments.len() >= 2
-            && i.segments[0].ident == "Self"
-        {
+        if i.segments.len() >= 2 && i.segments[0].ident == "Self" {
             let name = i.segments[1].ident.to_string();
             if let Some(replacement) = self.rewrites.get(&name) {
-                let remaining: Vec<syn::PathSegment> =
-                    i.segments.iter().skip(2).cloned().collect();
+                let remaining: Vec<syn::PathSegment> = i.segments.iter().skip(2).cloned().collect();
                 let mut first = syn::PathSegment::from(replacement.clone());
                 first.arguments = i.segments[1].arguments.clone();
                 let mut new_segments = Punctuated::new();
@@ -916,9 +1106,7 @@ fn generate_dispatch_method(
         quote! { let __raw = <dyn #trait_dyn_ref>::__devirt_raw_parts(self); }
     };
 
-    let hot_checks = gen_hot_checks(
-        hot_types, trait_dyn_ref, &spec_name, &arg_names, is_mut,
-    );
+    let hot_checks = gen_hot_checks(hot_types, trait_dyn_ref, &spec_name, &arg_names, is_mut);
 
     let fallback = if is_unsafe {
         quote! { unsafe { #inner_name::#spec_name(self, #(#arg_names),*) } }
@@ -1090,8 +1278,7 @@ fn expand_impl(attr: &TokenStream, impl_item: &syn::ItemImpl) -> TokenStream {
     let inner_name = format_ident!("__{trait_name}Impl");
     let trait_args = &trait_segment.arguments;
     let ty = &impl_item.self_ty;
-    let (impl_generics, _, where_clause) =
-        impl_item.generics.split_for_impl();
+    let (impl_generics, _, where_clause) = impl_item.generics.split_for_impl();
 
     let type_items: Vec<_> = impl_item
         .items
@@ -1181,8 +1368,7 @@ impl VisitMut for RewriteSelfCalls {
         // `syn::visit_mut` does not descend into macro token streams,
         // so we do a token-level rewrite for `self.method()` patterns
         // inside macro invocations (e.g. `format!`, `write!`).
-        i.tokens =
-            rewrite_self_calls_in_tokens(&self.method_names, i.tokens.clone());
+        i.tokens = rewrite_self_calls_in_tokens(&self.method_names, i.tokens.clone());
     }
 }
 
@@ -1216,19 +1402,16 @@ fn rewrite_self_calls_in_tokens(
         {
             out.push(tts[i].clone());
             out.push(tts[i + 1].clone());
-            out.push(proc_macro2::TokenTree::Ident(
-                proc_macro2::Ident::new(
-                    &format!("__spec_{method}"),
-                    method.span(),
-                ),
-            ));
+            out.push(proc_macro2::TokenTree::Ident(proc_macro2::Ident::new(
+                &format!("__spec_{method}"),
+                method.span(),
+            )));
             i += 3;
             continue;
         }
         // Recurse into groups (parenthesized, braced, bracketed).
         if let proc_macro2::TokenTree::Group(ref g) = tts[i] {
-            let inner =
-                rewrite_self_calls_in_tokens(method_names, g.stream());
+            let inner = rewrite_self_calls_in_tokens(method_names, g.stream());
             let mut ng = proc_macro2::Group::new(g.delimiter(), inner);
             ng.set_span(g.span());
             out.push(proc_macro2::TokenTree::Group(ng));
