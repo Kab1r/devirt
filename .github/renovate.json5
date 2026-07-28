@@ -3,6 +3,12 @@
   extends: ["config:best-practices", ":automergeStableNonMajor"],
   packageRules: [
     {
+      // Digest updates preserve the selected release while refreshing the
+      // immutable commit pin. Let required CI gate and merge them automatically.
+      matchUpdateTypes: ["digest"],
+      automerge: true,
+    },
+    {
       // The `vstd` crate (from crates.io) and the `verus` binary (pinned as
       // `VERUS_TAG` in CI workflows, tracked via the custom manager below)
       // must be upgraded together: `libvstd.rlib` shipped in the verus release
