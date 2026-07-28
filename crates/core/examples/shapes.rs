@@ -5,13 +5,30 @@
 //! All four are used identically through `dyn Shape`.
 //!
 //! Note: this example uses `std`; the `devirt` crate itself is `#![no_std]`.
-#![expect(clippy::print_stdout, reason = "example intentionally prints output to demonstrate API usage")]
-#![expect(clippy::unnecessary_literal_bound, reason = "trait declares &str, not &'static str")]
+#![expect(
+    clippy::print_stdout,
+    reason = "example intentionally prints output to demonstrate API usage"
+)]
+#![expect(
+    clippy::unnecessary_literal_bound,
+    reason = "trait declares &str, not &'static str"
+)]
 
-struct Circle { radius: f64 }
-struct Rect { w: f64, h: f64 }
-struct Triangle { a: f64, b: f64, c: f64 }
-struct Hexagon { side: f64 }
+struct Circle {
+    radius: f64,
+}
+struct Rect {
+    w: f64,
+    h: f64,
+}
+struct Triangle {
+    a: f64,
+    b: f64,
+    c: f64,
+}
+struct Hexagon {
+    side: f64,
+}
 
 // 1. Define trait — list hot types in the attribute
 #[devirt::devirt(Circle, Rect)]
@@ -51,13 +68,19 @@ impl Shape for Circle {
     fn describe(&self) {
         println!("circle with radius {:.2}", self.radius);
     }
-    fn name(&self) -> &str { "circle" }
+    fn name(&self) -> &str {
+        "circle"
+    }
 }
 
 #[devirt::devirt]
 impl Shape for Rect {
-    fn area(&self) -> f64 { self.w * self.h }
-    fn perimeter(&self) -> f64 { 2.0 * (self.w + self.h) }
+    fn area(&self) -> f64 {
+        self.w * self.h
+    }
+    fn perimeter(&self) -> f64 {
+        2.0 * (self.w + self.h)
+    }
     fn scale(&mut self, factor: f64) {
         self.w *= factor;
         self.h *= factor;
@@ -70,7 +93,9 @@ impl Shape for Rect {
     fn describe(&self) {
         println!("rectangle {}×{:.2}", self.w, self.h);
     }
-    fn name(&self) -> &str { "rectangle" }
+    fn name(&self) -> &str {
+        "rectangle"
+    }
 }
 
 #[devirt::devirt]
@@ -79,7 +104,9 @@ impl Shape for Triangle {
         let s = (self.a + self.b + self.c) / 2.0;
         (s * (s - self.a) * (s - self.b) * (s - self.c)).sqrt()
     }
-    fn perimeter(&self) -> f64 { self.a + self.b + self.c }
+    fn perimeter(&self) -> f64 {
+        self.a + self.b + self.c
+    }
     fn scale(&mut self, factor: f64) {
         self.a *= factor;
         self.b *= factor;
@@ -93,17 +120,28 @@ impl Shape for Triangle {
         max <= 100.0
     }
     fn describe(&self) {
-        println!("triangle with sides {:.2}, {:.2}, {:.2}", self.a, self.b, self.c);
+        println!(
+            "triangle with sides {:.2}, {:.2}, {:.2}",
+            self.a, self.b, self.c
+        );
     }
-    fn name(&self) -> &str { "triangle" }
+    fn name(&self) -> &str {
+        "triangle"
+    }
 }
 
 // Cold type — implements ShapeBase directly, no #[devirt] needed.
 // Downstream crates can do this without depending on devirt at all.
 impl ShapeBase for Hexagon {
-    fn area(&self) -> f64 { 1.5 * 3.0_f64.sqrt() * self.side * self.side }
-    fn perimeter(&self) -> f64 { 6.0 * self.side }
-    fn scale(&mut self, factor: f64) { self.side *= factor; }
+    fn area(&self) -> f64 {
+        1.5 * 3.0_f64.sqrt() * self.side * self.side
+    }
+    fn perimeter(&self) -> f64 {
+        6.0 * self.side
+    }
+    fn scale(&mut self, factor: f64) {
+        self.side *= factor;
+    }
     fn try_scale(&mut self, factor: f64) -> bool {
         self.side *= factor;
         self.side * 2.0 <= 100.0
@@ -111,14 +149,20 @@ impl ShapeBase for Hexagon {
     fn describe(&self) {
         println!("regular hexagon with side {:.2}", self.side);
     }
-    fn name(&self) -> &str { "hexagon" }
+    fn name(&self) -> &str {
+        "hexagon"
+    }
 }
 
 // 3. Use — completely normal dyn Trait. Nothing special.
 
 fn print_shape(s: &dyn Shape) {
-    println!("{:<10} area={:>8.2}  perim={:>8.2}",
-        s.name(), s.area(), s.perimeter());
+    println!(
+        "{:<10} area={:>8.2}  perim={:>8.2}",
+        s.name(),
+        s.area(),
+        s.perimeter()
+    );
 }
 
 fn total_area(shapes: &[Box<dyn Shape>]) -> f64 {
@@ -127,10 +171,14 @@ fn total_area(shapes: &[Box<dyn Shape>]) -> f64 {
 
 fn main() {
     let mut shapes: Vec<Box<dyn Shape>> = vec![
-        Box::new(Circle { radius: 5.0 }),                // → vtable-cmp hot
-        Box::new(Rect { w: 3.0, h: 4.0 }),              // → vtable-cmp hot
-        Box::new(Triangle { a: 3.0, b: 4.0, c: 5.0 }), // → vtable fallback
-        Box::new(Hexagon { side: 2.0 }),                 // → vtable fallback
+        Box::new(Circle { radius: 5.0 }),  // → vtable-cmp hot
+        Box::new(Rect { w: 3.0, h: 4.0 }), // → vtable-cmp hot
+        Box::new(Triangle {
+            a: 3.0,
+            b: 4.0,
+            c: 5.0,
+        }), // → vtable fallback
+        Box::new(Hexagon { side: 2.0 }),   // → vtable fallback
     ];
 
     println!("=== dyn Shape — devirtualization is invisible ===");

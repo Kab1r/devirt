@@ -46,7 +46,9 @@ impl Shape for Circle {
 
 #[devirt::devirt]
 impl Shape for Rect {
-    fn area(&self) -> f64 { self.w * self.h }
+    fn area(&self) -> f64 {
+        self.w * self.h
+    }
     fn scale(&mut self, factor: f64) {
         self.w *= factor;
         self.h *= factor;
@@ -68,8 +70,12 @@ impl Shape for Triangle {
 
 #[devirt::devirt]
 impl Shape for Hexagon {
-    fn area(&self) -> f64 { 1.5 * 3.0_f64.sqrt() * self.side * self.side }
-    fn scale(&mut self, factor: f64) { self.side *= factor; }
+    fn area(&self) -> f64 {
+        1.5 * 3.0_f64.sqrt() * self.side * self.side
+    }
+    fn scale(&mut self, factor: f64) {
+        self.side *= factor;
+    }
 }
 
 // ── Explicit Branch-Based Dispatch ───────────────────────────────────────────
@@ -373,7 +379,11 @@ fn make_hot_dominant_shapes_devirt() -> Vec<Box<dyn Shape>> {
         Box::new(Rect { w: 5.0, h: 6.0 }),
         Box::new(Rect { w: 2.0, h: 8.0 }),
         Box::new(Rect { w: 1.0, h: 1.0 }),
-        Box::new(Triangle { a: 3.0, b: 4.0, c: 5.0 }),
+        Box::new(Triangle {
+            a: 3.0,
+            b: 4.0,
+            c: 5.0,
+        }),
         Box::new(Hexagon { side: 2.0 }),
     ]
 }
@@ -388,7 +398,11 @@ fn make_hot_dominant_shapes_plain() -> Vec<Box<dyn PlainShape>> {
         Box::new(Rect { w: 5.0, h: 6.0 }),
         Box::new(Rect { w: 2.0, h: 8.0 }),
         Box::new(Rect { w: 1.0, h: 1.0 }),
-        Box::new(Triangle { a: 3.0, b: 4.0, c: 5.0 }),
+        Box::new(Triangle {
+            a: 3.0,
+            b: 4.0,
+            c: 5.0,
+        }),
         Box::new(Hexagon { side: 2.0 }),
     ]
 }
@@ -533,7 +547,11 @@ fn make_shuffled_devirt(n: usize) -> Vec<Box<dyn Shape>> {
         v.push(match bucket {
             0..=3 => Box::new(Circle { radius: 5.0 }),
             4..=7 => Box::new(Rect { w: 3.0, h: 4.0 }),
-            8 => Box::new(Triangle { a: 3.0, b: 4.0, c: 5.0 }),
+            8 => Box::new(Triangle {
+                a: 3.0,
+                b: 4.0,
+                c: 5.0,
+            }),
             _ => Box::new(Hexagon { side: 1.5 }),
         });
     }
@@ -547,7 +565,11 @@ fn make_shuffled_plain(n: usize) -> Vec<Box<dyn PlainShape>> {
         v.push(match bucket {
             0..=3 => Box::new(Circle { radius: 5.0 }),
             4..=7 => Box::new(Rect { w: 3.0, h: 4.0 }),
-            8 => Box::new(Triangle { a: 3.0, b: 4.0, c: 5.0 }),
+            8 => Box::new(Triangle {
+                a: 3.0,
+                b: 4.0,
+                c: 5.0,
+            }),
             _ => Box::new(Hexagon { side: 1.5 }),
         });
     }
@@ -600,7 +622,11 @@ fn make_shuffled_devirt_send(n: usize) -> Vec<Box<dyn Shape + Send>> {
         v.push(match bucket {
             0..=3 => Box::new(Circle { radius: 5.0 }),
             4..=7 => Box::new(Rect { w: 3.0, h: 4.0 }),
-            8 => Box::new(Triangle { a: 3.0, b: 4.0, c: 5.0 }),
+            8 => Box::new(Triangle {
+                a: 3.0,
+                b: 4.0,
+                c: 5.0,
+            }),
             _ => Box::new(Hexagon { side: 1.5 }),
         });
     }
@@ -614,7 +640,11 @@ fn make_shuffled_plain_send(n: usize) -> Vec<Box<dyn PlainShape + Send>> {
         v.push(match bucket {
             0..=3 => Box::new(Circle { radius: 5.0 }),
             4..=7 => Box::new(Rect { w: 3.0, h: 4.0 }),
-            8 => Box::new(Triangle { a: 3.0, b: 4.0, c: 5.0 }),
+            8 => Box::new(Triangle {
+                a: 3.0,
+                b: 4.0,
+                c: 5.0,
+            }),
             _ => Box::new(Hexagon { side: 1.5 }),
         });
     }

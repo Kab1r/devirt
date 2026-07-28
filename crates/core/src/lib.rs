@@ -772,8 +772,12 @@ mod primitives {
     }
 
     impl ProbeBase for NakedCold {
-        fn get(&self) -> u64 { self.val.wrapping_mul(2) }
-        fn set(&mut self, v: u64) { self.val = v.wrapping_mul(2); }
+        fn get(&self) -> u64 {
+            self.val.wrapping_mul(2)
+        }
+        fn set(&mut self, v: u64) {
+            self.val = v.wrapping_mul(2);
+        }
     }
 
     #[test]
