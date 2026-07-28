@@ -225,7 +225,7 @@ fn validate_trait_method(f: &syn::TraitItemFn) -> Result<(), syn::Error> {
             "#[devirt] methods must have a `&self` or `&mut self` receiver",
         ));
     };
-    if recv.reference.is_none() {
+    if !receiver_is_by_reference(recv) {
         return Err(syn::Error::new_spanned(
             recv,
             "#[devirt] does not support owned self or custom self types; \
@@ -245,6 +245,18 @@ fn validate_trait_method(f: &syn::TraitItemFn) -> Result<(), syn::Error> {
         }
     }
     Ok(())
+}
+
+const fn receiver_is_by_reference(receiver: &syn::Receiver) -> bool {
+    matches!(&receiver.kind, syn::ReceiverKind::Reference(_, _, _))
+}
+
+const fn receiver_is_mutable_reference(receiver: &syn::Receiver) -> bool {
+    matches!(&receiver.kind, syn::ReceiverKind::Reference(_, _, Some(_)))
+}
+
+const fn signature_is_unsafe(signature: &syn::Signature) -> bool {
+    matches!(&signature.safety, syn::Safety::Unsafe(_))
 }
 
 struct AssocTypeInfo {
@@ -1090,7 +1102,7 @@ fn generate_fallback_method(
     let sig = &method.sig;
     let attrs = &method.attrs;
     let spec_name = format_ident!("__spec_{}", sig.ident);
-    let is_unsafe = sig.unsafety.is_some();
+    let is_unsafe = signature_is_unsafe(sig);
 
     let (mut dispatch_sig, arg_names) = rewrite_sig_with_named_args(sig);
     if !assoc_rewrites.is_empty() {
@@ -1142,8 +1154,8 @@ fn generate_dispatch_method(
         })
         .expect("validated: method has receiver");
 
-    let is_mut = receiver.mutability.is_some();
-    let is_unsafe = sig.unsafety.is_some();
+    let is_mut = receiver_is_mutable_reference(receiver);
+    let is_unsafe = signature_is_unsafe(sig);
 
     let (mut dispatch_sig, arg_names) = rewrite_sig_with_named_args(sig);
     if !assoc_rewrites.is_empty() {
@@ -1251,8 +1263,8 @@ fn generate_delegating_method(
         })
         .expect("validated: method has receiver");
 
-    let is_mut = receiver.mutability.is_some();
-    let is_unsafe = sig.unsafety.is_some();
+    let is_mut = receiver_is_mutable_reference(receiver);
+    let is_unsafe = signature_is_unsafe(sig);
     let (mut dispatch_sig, arg_names) = rewrite_sig_with_named_args(sig);
     if !assoc_rewrites.is_empty() {
         let mut rewriter = RewriteSelfAssocTypes {
@@ -1301,7 +1313,7 @@ fn expand_impl(attr: &TokenStream, impl_item: &syn::ItemImpl) -> TokenStream {
         .into();
     }
 
-    let Some((_, trait_path, _)) = &impl_item.trait_ else {
+    let Some((trait_path, _)) = &impl_item.trait_ else {
         return syn::Error::new(
             proc_macro2::Span::call_site(),
             "#[devirt] requires `impl Trait for Type`, not a bare impl block",
