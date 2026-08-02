@@ -319,25 +319,9 @@ dependencies = [
 
 [[package]]
 name = "hashbrown"
-version = "0.12.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8a9ee70c43aaf417c914396645a0fa852624801b24ebb7ae78fe8272889ac888"
-
-[[package]]
-name = "hashbrown"
 version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
-
-[[package]]
-name = "indexmap"
-version = "1.9.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bd070e393353796e801d209ad339e89596eb4c8d430d18ede6a1cced8fafbd99"
-dependencies = [
- "autocfg",
- "hashbrown 0.12.3",
-]
 
 [[package]]
 name = "indexmap"
@@ -346,7 +330,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d466e9454f08e4a911e14806c24e16fba1b4c121d1ea474396f396069cf949d9"
 dependencies = [
  "equivalent",
- "hashbrown 0.17.1",
+ "hashbrown",
 ]
 
 [[package]]
@@ -694,7 +678,7 @@ version = "1.1.3+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "53c96ecdfa941c8fc4fcaed14f99ada8ebed502eef533015095a07e3301d4c3c"
 dependencies = [
- "indexmap 2.14.0",
+ "indexmap",
  "serde_core",
  "serde_spanned",
  "toml_datetime",
@@ -750,15 +734,15 @@ checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
 
 [[package]]
 name = "verus_builtin"
-version = "0.0.0-2026-07-27-0206"
+version = "0.0.0-2026-08-02-0125"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e70a747c69a08b336573d67a8702993572317ab0f506084f717e6cefd3835f56"
+checksum = "c27a0e580576f364e98925a61618089591e5bdea6e1ccf048b1d56ab3dfada70"
 
 [[package]]
 name = "verus_builtin_macros"
-version = "0.0.0-2026-07-27-0206"
+version = "0.0.0-2026-08-02-0125"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a3b07917203e0f36da3d29529f511f1ec27a1825529846433b4bc7384d400444"
+checksum = "eabf0883a6e62f1db1538f96607e500dd396ada513329c3f486a14de5611d55b"
 dependencies = [
  "convert_case",
  "proc-macro2",
@@ -771,9 +755,9 @@ dependencies = [
 
 [[package]]
 name = "verus_prettyplease"
-version = "0.0.0-2026-07-27-0206"
+version = "0.0.0-2026-08-02-0125"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "028a6b1bedf498a425f5fa733c4a9aada900734c5ac82e4801597ff3ff70fa62"
+checksum = "d88628e583fb019eac36690ca2500b158f0221df6be2bae1e7c2a35dd6536bfc"
 dependencies = [
  "proc-macro2",
  "verus_syn",
@@ -781,11 +765,11 @@ dependencies = [
 
 [[package]]
 name = "verus_state_machines_macros"
-version = "0.0.0-2026-07-27-0206"
+version = "0.0.0-2026-08-02-0125"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "911e2a65229749eeb48a1f27d2b47a46b4fb43673f918854b065a932c86305b9"
+checksum = "93f77ff8d121edb1bf2651335769a80a2f611da8573c3b498434a66b3162805f"
 dependencies = [
- "indexmap 1.9.3",
+ "indexmap",
  "proc-macro2",
  "quote",
  "verus_syn",
@@ -793,9 +777,9 @@ dependencies = [
 
 [[package]]
 name = "verus_syn"
-version = "0.0.0-2026-07-27-0206"
+version = "0.0.0-2026-08-02-0125"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fdcccb102ae806c65ae59653757ac28ecff328f996159757d17b5c735a7f7850"
+checksum = "f17237ea6d267e457d53ce36f55b315fc9edd26eb88c765dd95e035c0b415869"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -804,9 +788,9 @@ dependencies = [
 
 [[package]]
 name = "vstd"
-version = "0.0.0-2026-07-27-0206"
+version = "0.0.0-2026-08-02-0125"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3c72419942f28be7f54bca5e8bc1ac207f9efd45e424788905ecb1213881950a"
+checksum = "25040241d96eb88dfc6a75c289dc0ef84845ffff051d8e595cc55908d5c06a45"
 dependencies = [
  "verus_builtin",
  "verus_builtin_macros",
