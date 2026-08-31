@@ -8,7 +8,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  VERUS_TAG: release/0.2026.08.23.fbbbbcf
+  VERUS_TAG: release/0.2026.08.30.b432e82
 
 permissions:
   contents: read
