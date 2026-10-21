@@ -1,0 +1,19 @@
+[package]
+name = "tantivy-devirt-bench"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+devirt = { path = "../../crates/core" }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "scorer"
+harness = false
+
+[profile.bench]
+lto = "thin"
+codegen-units = 1
