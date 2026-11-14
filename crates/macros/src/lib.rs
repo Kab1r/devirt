@@ -400,13 +400,12 @@ fn build_fat_ptr_assertion(
         .generics
         .where_clause
         .as_ref()
-        .map(|wc| {
+        .map_or_default(|wc| {
             wc.predicates
                 .iter()
                 .filter(|pred| !predicate_references_self(pred))
                 .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
+        });
 
     let where_clause = if where_preds.is_empty() {
         quote! {}
