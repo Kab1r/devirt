@@ -79,9 +79,11 @@
 //!    two-usize fat pointer — verified by a compile-time `size_of` assertion
 //!    and a `#[cfg(test)]` ordering check.
 //! 2. Reinterpreting the data half as `*const HotType` / `*mut HotType` on
-//!    a vtable match. Safe because distinct types have distinct vtables
-//!    (vtables encode size, alignment, and drop glue), and the compiler
-//!    deduplicates vtables for the same `(Type, Trait)` pair under LTO.
+//!    a vtable match. This relies on distinct types having distinct
+//!    vtable addresses, which rustc and the supported linkers provide in
+//!    practice but the language does not guarantee: a toolchain that
+//!    folds identical vtables of two layout-compatible types would
+//!    dispatch one as the other.
 //! 3. Coercing a dangling `*const T` to `*const dyn Trait` inside
 //!    `__devirt_vtable_for` to read the vtable address. Safe because
 //!    coercion is a metadata-attaching operation that does not dereference
@@ -93,6 +95,13 @@
 //! generic parameters, no `Self` in return position. The generated blanket
 //! impl requires `dyn Trait` to work, so violating object safety will produce
 //! errors pointing at the generated impl rather than the method definition.
+//!
+//! **Traits with associated types need `Sized` implementors.** For such
+//! traits the bridge from `XBase` to the hidden inner trait is only
+//! generated for `Sized` types, so `XBase` cannot be implemented for
+//! `str`, slices, or trait objects. Allowing unsized implementors would
+//! let `impl XBase for dyn X<Assoc = A>` name a second, conflicting
+//! value for the associated type (rust-lang/rust#57893).
 //!
 //! **Hot types must be `'static`.** The vtable-probe helper coerces a
 //! `*const T` to `*const dyn Trait`, which inherits `dyn Trait`'s default
