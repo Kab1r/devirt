@@ -1,0 +1,19 @@
+error[E0277]: the size for values of type `T` cannot be known at compilation time
+  --> tests/ui_attr/attr_assoc_object_impl.rs:19:37
+   |
+19 | fn launder<T: ?Sized + ConvBase>(x: <T as __ConvImpl>::Out) -> <T as ConvBase>::Out {
+   |            -                        ^^^^^^^^^^^^^^^^^^^^^^ doesn't have a size known at compile-time
+   |            |
+   |            this type parameter needs to be `Sized`
+   |
+note: required for `T` to implement `__ConvImpl`
+  --> tests/ui_attr/attr_assoc_object_impl.rs:3:1
+   |
+ 3 | #[devirt::devirt(Hot)]
+   | ^^^^^^^^^^^^^^^^^^^^^^
+   = note: this error originates in the attribute macro `devirt::devirt` (in Nightly builds, run with -Z macro-backtrace for more info)
+help: consider removing the `?Sized` bound to make the type parameter `Sized`
+   |
+19 - fn launder<T: ?Sized + ConvBase>(x: <T as __ConvImpl>::Out) -> <T as ConvBase>::Out {
+19 + fn launder<T: ConvBase>(x: <T as __ConvImpl>::Out) -> <T as ConvBase>::Out {
+   |
