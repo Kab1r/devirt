@@ -30,6 +30,7 @@ cargo kani --tests -p devirt
 # unsafe fat-pointer transmute and &mut dispatch path are sound under
 # Stacked Borrows
 cargo +nightly miri test -p devirt --lib
+MIRIFLAGS="-Zmiri-many-seeds=0..32 -Zmiri-strict-provenance" cargo +nightly miri test -p devirt --test equivalence
 
 # Run benchmarks
 cargo bench
@@ -79,7 +80,7 @@ There are two independent expansion paths:
 For a trait `Foo` with hot types `[A, B]`:
 1. Generates hidden inner trait `__FooImpl` with `__spec_*` method declarations.
 2. Generates public base trait `FooBase` with the original method signatures (including default bodies). Cold types implement this directly without depending on `devirt`.
-3. Generates blanket impl `impl<T: FooBase + ?Sized> __FooImpl for T { ... }` bridging base trait methods to `__spec_*` via `#[inline(always)]` delegation.
+3. Generates blanket impl `impl<T: FooBase + ?Sized> __FooImpl for T { ... }` bridging base trait methods to `__spec_*` via `#[inline(always)]` delegation. The proc-macro drops `?Sized` when the trait has associated types (rust-lang/rust#57893).
 4. Generates a compile-time assertion that `size_of::<*const dyn Foo>() == 2 * size_of::<usize>()`.
 5. Generates `impl<'a> dyn Foo + 'a { ... }` with two primitive helpers — `__devirt_raw_parts(&Self) -> [usize; 2]` and `__devirt_vtable_for::<T: __FooImpl + 'static>() -> usize` — plus inherent methods for each user-declared trait method whose body is the vtable-comparison dispatch shim.
 6. Generates public marker trait `Foo: __FooImpl` (no methods of its own).
