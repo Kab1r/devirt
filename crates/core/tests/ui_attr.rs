@@ -29,4 +29,5 @@ fn ui_attr() {
     t.compile_fail("tests/ui_attr/attr_unsafe_missing_on_impl.rs");
     t.compile_fail("tests/ui_attr/attr_args_on_impl.rs");
     t.compile_fail("tests/ui_attr/attr_on_struct.rs");
+    t.compile_fail("tests/ui_attr/attr_assoc_object_impl.rs");
 }

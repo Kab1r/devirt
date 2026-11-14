@@ -655,6 +655,18 @@ fn build_base_bridge_items(
         .collect()
 }
 
+fn base_blanket_unsized_bound(trait_item: &syn::ItemTrait) -> proc_macro2::TokenStream {
+    let has_assoc_types = trait_item
+        .items
+        .iter()
+        .any(|item| matches!(item, syn::TraitItem::Type(_)));
+    if has_assoc_types {
+        quote! {}
+    } else {
+        quote! { + ?Sized }
+    }
+}
+
 #[expect(clippy::too_many_arguments)]
 fn build_base_trait_expansion(
     trait_item: &syn::ItemTrait,
@@ -676,10 +688,11 @@ fn build_base_trait_expansion(
     } else {
         quote! {}
     };
+    let unsized_bound = base_blanket_unsized_bound(trait_item);
     let base_blanket = if has_trait_generics {
         quote! {
             #unsafety impl<
-                __DevirtT: #base_name #trait_ty_generics + ?Sized,
+                __DevirtT: #base_name #trait_ty_generics #unsized_bound,
                 #trait_generic_params
             > #inner_name #trait_ty_generics for __DevirtT #trait_where_clause {
                 #(#base_bridge_items)*
@@ -687,7 +700,7 @@ fn build_base_trait_expansion(
         }
     } else {
         quote! {
-            #unsafety impl<__DevirtT: #base_name + ?Sized>
+            #unsafety impl<__DevirtT: #base_name #unsized_bound>
                 #inner_name for __DevirtT #trait_where_clause
             {
                 #(#base_bridge_items)*
@@ -819,10 +832,11 @@ fn build_existing_base_trait_expansion(ctx: &TraitExpansion<'_>) -> proc_macro2:
     let unsafety = ctx.trait_item.unsafety.as_ref();
     let trait_generic_params = ctx.trait_generic_params;
     let trait_where_clause = ctx.trait_where_clause;
+    let unsized_bound = base_blanket_unsized_bound(trait_item);
     let base_blanket = if ctx.has_trait_generics {
         quote! {
             #unsafety impl<
-                __DevirtT: #base_name #trait_ty_generics + ?Sized,
+                __DevirtT: #base_name #trait_ty_generics #unsized_bound,
                 #trait_generic_params
             > #inner_name #trait_ty_generics for __DevirtT #trait_where_clause {
                 #(#base_bridge_items)*
@@ -830,7 +844,7 @@ fn build_existing_base_trait_expansion(ctx: &TraitExpansion<'_>) -> proc_macro2:
         }
     } else {
         quote! {
-            #unsafety impl<__DevirtT: #base_name + ?Sized>
+            #unsafety impl<__DevirtT: #base_name #unsized_bound>
                 #inner_name for __DevirtT #trait_where_clause
             {
                 #(#base_bridge_items)*
@@ -1206,7 +1220,8 @@ fn gen_hot_checks(
                     if __raw[1]
                         == <dyn #trait_dyn_ref>::__devirt_vtable_for::<#hot>()
                     {
-                        let __p: *mut #hot = __raw[0] as *mut #hot;
+                        let __p: *mut #hot =
+                            ::core::ptr::from_mut::<Self>(self).cast::<#hot>();
                         // SAFETY: vtable identity implies type identity.
                         // The `&mut` reborrow is scoped to this method
                         // call and released before the enclosing `&mut
@@ -1221,7 +1236,8 @@ fn gen_hot_checks(
                     if __raw[1]
                         == <dyn #trait_dyn_ref>::__devirt_vtable_for::<#hot>()
                     {
-                        let __p: *const #hot = __raw[0] as *const #hot;
+                        let __p: *const #hot =
+                            ::core::ptr::from_ref::<Self>(self).cast::<#hot>();
                         // SAFETY: vtable identity implies type identity.
                         // The data half is the original `&HotType` the
                         // caller coerced into the fat pointer.

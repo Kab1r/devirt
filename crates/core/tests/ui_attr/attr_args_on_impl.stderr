@@ -47,10 +47,13 @@ note: required by a bound in `<(dyn ArgsOnImpl + '__devirt)>::__devirt_vtable_fo
 6 | |         fn get(&self) -> i32;
 7 | |     }
 8 | | }
-  | | ^
-  | | |
-  | |_required by a bound in this associated function
-  |   required by this bound in `<dyn ArgsOnImpl>::__devirt_vtable_for`
+  | |_^ required by this bound in `<dyn ArgsOnImpl>::__devirt_vtable_for`
+  |
+ ::: src/lib.rs
+  |
+  |               impl<'__devirt> dyn $trait_name + '__devirt {
+...
+  |                   pub fn __devirt_vtable_for<
   = note: this error originates in the macro `devirt::__devirt_define` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error[E0599]: the method `__spec_get` exists for reference `&Foo`, but its trait bounds were not satisfied

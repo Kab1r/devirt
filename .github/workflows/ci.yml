@@ -61,6 +61,13 @@ jobs:
       # the only ones Miri needs to check — the trybuild UI tests
       # don't exercise any unsafe code and Kani has its own harness.
       - run: cargo +nightly miri test -p devirt --lib
+      # The proc-macro attribute emits its own dispatch code, which the
+      # lib tests above do not cover. Miri randomises vtable addresses
+      # per coercion, so the hot branch is only taken on some seeds;
+      # run many so both branches are checked.
+      - run: cargo +nightly miri test -p devirt --test equivalence
+        env:
+          MIRIFLAGS: -Zmiri-many-seeds=0..32 -Zmiri-strict-provenance
 
   kani:
     name: Kani
