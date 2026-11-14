@@ -96,12 +96,14 @@
 //! impl requires `dyn Trait` to work, so violating object safety will produce
 //! errors pointing at the generated impl rather than the method definition.
 //!
-//! **Traits with associated types need `Sized` implementors.** For such
-//! traits the bridge from `XBase` to the hidden inner trait is only
-//! generated for `Sized` types, so `XBase` cannot be implemented for
-//! `str`, slices, or trait objects. Allowing unsized implementors would
-//! let `impl XBase for dyn X<Assoc = A>` name a second, conflicting
-//! value for the associated type (rust-lang/rust#57893).
+//! **Traits with associated types only bridge `Sized` implementors.** For
+//! such traits the blanket impl from `XBase` to the hidden inner trait
+//! covers `Sized` types only. An unsized type (`str`, a slice, a trait
+//! object) can still implement `XBase`, but it does not get the inner
+//! trait from that impl and so does not implement `X`. Bridging unsized
+//! implementors would let `impl XBase for dyn X<Assoc = A>` name a
+//! second, conflicting value for the associated type
+//! (rust-lang/rust#57893).
 //!
 //! **Hot types must be `'static`.** The vtable-probe helper coerces a
 //! `*const T` to `*const dyn Trait`, which inherits `dyn Trait`'s default
