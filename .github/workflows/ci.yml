@@ -12,6 +12,8 @@ env:
   # Kept in sync with the `vstd` crate version in Cargo.toml by Renovate
   # (see .github/renovate.json5 — the `verus` group bundles the two updates).
   VERUS_TAG: release/0.2026.08.30.b432e82
+  # Tracked by Renovate (see .github/renovate.json5).
+  KANI_VERSION: 0.68.0
 
 permissions:
   contents: read
@@ -83,11 +85,13 @@ jobs:
           path: |
             ~/.cargo/bin/cargo-kani
             ~/.kani
-          key: kani-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          key: kani-${{ runner.os }}-${{ env.KANI_VERSION }}
       - name: Install Kani
         if: steps.cache-kani.outputs.cache-hit != 'true'
         run: |
-          cargo install kani-verifier --locked
+          # rust-cache can restore a stale ~/.cargo/bin/cargo-kani even when
+          # the Kani cache above misses, so overwrite it.
+          cargo install kani-verifier --locked --force --version "$KANI_VERSION"
           cargo kani setup
       - run: cargo kani --tests -p devirt
 
