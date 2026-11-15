@@ -763,3 +763,98 @@ fn attr_devirt_trait_name_dispatch() {
     assert_eq!(hot.val, 5);
     assert_eq!(cold.val, 6);
 }
+
+// ── Regression: generated locals must not capture argument names ────────────
+
+#[cfg(feature = "macros")]
+mod attr_hygiene {
+    pub struct Hot;
+    pub struct Cold;
+
+    #[devirt::devirt(Hot)]
+    pub trait Echo {
+        fn raw(&mut self, __raw: [usize; 2]) -> [usize; 2];
+        fn ptr(&self, __p: *const Hot) -> *const Hot;
+        fn base(&self, __devirt_base: u8) -> u8;
+    }
+
+    #[devirt::devirt]
+    impl Echo for Hot {
+        fn raw(&mut self, __raw: [usize; 2]) -> [usize; 2] {
+            __raw
+        }
+        fn ptr(&self, __p: *const Self) -> *const Self {
+            __p
+        }
+        fn base(&self, __devirt_base: u8) -> u8 {
+            __devirt_base
+        }
+    }
+
+    #[devirt::devirt]
+    impl Echo for Cold {
+        fn raw(&mut self, __raw: [usize; 2]) -> [usize; 2] {
+            __raw
+        }
+        fn ptr(&self, __p: *const Hot) -> *const Hot {
+            __p
+        }
+        fn base(&self, __devirt_base: u8) -> u8 {
+            __devirt_base
+        }
+    }
+}
+
+#[cfg(feature = "macros")]
+#[test]
+fn attr_argument_names_are_not_captured() {
+    use attr_hygiene::{Cold, Echo, Hot};
+    let (mut h, mut c) = (Hot, Cold);
+    let objs: [&mut dyn Echo; 2] = [&mut h, &mut c];
+    for d in objs {
+        assert_eq!(d.raw([1, 2]), [1, 2]);
+        assert!(d.ptr(core::ptr::null()).is_null());
+    }
+    let send: &(dyn Echo + Send) = &Hot;
+    assert_eq!(send.base(7), 7);
+}
+
+// ── Regression: hot calls go through the inner trait, not inherent methods ──
+
+#[cfg(feature = "macros")]
+mod attr_inherent_shadow {
+    pub struct W<'a>(pub &'a str);
+
+    impl W<'static> {
+        pub const fn __spec_get(&self) -> &'static str {
+            self.0
+        }
+    }
+
+    #[devirt::devirt(W<'static>)]
+    pub trait Get {
+        fn get(&self) -> &'static str;
+    }
+
+    impl GetBase for W<'_> {
+        fn get(&self) -> &'static str {
+            "trait"
+        }
+    }
+}
+
+#[cfg(feature = "macros")]
+#[test]
+fn attr_hot_call_ignores_inherent_method() {
+    use attr_inherent_shadow::{Get, W};
+    let s = alloc_string();
+    let w = W(&s);
+    let d: &dyn Get = &w;
+    assert_eq!(d.get(), "trait");
+    assert_eq!(w.0, "short-lived");
+}
+
+#[cfg(feature = "macros")]
+fn alloc_string() -> String {
+    String::from("short-lived")
+}

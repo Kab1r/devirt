@@ -1179,13 +1179,24 @@ fn generate_dispatch_method(
         rewriter.visit_signature_mut(&mut dispatch_sig);
     }
 
+    // Locals use mixed-site hygiene so they cannot shadow, or be
+    // shadowed by, the trait method's own argument names.
+    let raw = syn::Ident::new("__raw", proc_macro2::Span::mixed_site());
     let raw_parts = if is_mut {
-        quote! { let __raw = <dyn #trait_dyn_ref>::__devirt_raw_parts(&*self); }
+        quote! { let #raw = <dyn #trait_dyn_ref>::__devirt_raw_parts(&*self); }
     } else {
-        quote! { let __raw = <dyn #trait_dyn_ref>::__devirt_raw_parts(self); }
+        quote! { let #raw = <dyn #trait_dyn_ref>::__devirt_raw_parts(self); }
     };
 
-    let hot_checks = gen_hot_checks(hot_types, trait_dyn_ref, &spec_name, &arg_names, is_mut);
+    let hot_checks = gen_hot_checks(
+        hot_types,
+        trait_dyn_ref,
+        &spec_name,
+        &arg_names,
+        is_mut,
+        &raw,
+        inner_name,
+    );
 
     let fallback = if is_unsafe {
         quote! { unsafe { #inner_name::#spec_name(self, #(#arg_names),*) } }
@@ -1211,38 +1222,48 @@ fn gen_hot_checks(
     spec_name: &syn::Ident,
     arg_names: &[syn::Ident],
     is_mut: bool,
+    raw: &syn::Ident,
+    inner_name: &syn::Ident,
 ) -> Vec<proc_macro2::TokenStream> {
+    let ptr = syn::Ident::new("__p", proc_macro2::Span::mixed_site());
     hot_types
         .iter()
         .map(|hot| {
             if is_mut {
                 quote! {
-                    if __raw[1]
+                    if #raw[1]
                         == <dyn #trait_dyn_ref>::__devirt_vtable_for::<#hot>()
                     {
-                        let __p: *mut #hot =
-                            ::core::ptr::from_mut::<Self>(self).cast::<#hot>();
+                        let #ptr: *mut #hot =
+                            ::core::ptr::from_mut::<Self>(self).cast::<()>().cast::<#hot>();
                         // SAFETY: vtable identity implies type identity.
                         // The `&mut` reborrow is scoped to this method
                         // call and released before the enclosing `&mut
                         // dyn Trait` is used again.
+                        // Fully qualified so the call always resolves to
+                        // the inner trait's impl, never to an inherent
+                        // method of the same name on the hot type.
                         return unsafe {
-                            (&mut *__p).#spec_name(#(#arg_names),*)
+                            <#hot as #inner_name>::#spec_name(
+                                &mut *#ptr, #(#arg_names),*
+                            )
                         };
                     }
                 }
             } else {
                 quote! {
-                    if __raw[1]
+                    if #raw[1]
                         == <dyn #trait_dyn_ref>::__devirt_vtable_for::<#hot>()
                     {
-                        let __p: *const #hot =
-                            ::core::ptr::from_ref::<Self>(self).cast::<#hot>();
+                        let #ptr: *const #hot =
+                            ::core::ptr::from_ref::<Self>(self).cast::<()>().cast::<#hot>();
                         // SAFETY: vtable identity implies type identity.
                         // The data half is the original `&HotType` the
                         // caller coerced into the fat pointer.
                         return unsafe {
-                            (&*__p).#spec_name(#(#arg_names),*)
+                            <#hot as #inner_name>::#spec_name(
+                                &*#ptr, #(#arg_names),*
+                            )
                         };
                     }
                 }
@@ -1289,15 +1310,16 @@ fn generate_delegating_method(
         rewriter.visit_signature_mut(&mut dispatch_sig);
     }
 
+    let base = syn::Ident::new("__devirt_base", proc_macro2::Span::mixed_site());
     let coerce_and_call = if is_mut {
         quote! {
-            let __devirt_base: &mut (dyn #trait_dyn_ref + '__devirt) = self;
-            __devirt_base.#method_name(#(#arg_names),*)
+            let #base: &mut (dyn #trait_dyn_ref + '__devirt) = self;
+            #base.#method_name(#(#arg_names),*)
         }
     } else {
         quote! {
-            let __devirt_base: &(dyn #trait_dyn_ref + '__devirt) = self;
-            __devirt_base.#method_name(#(#arg_names),*)
+            let #base: &(dyn #trait_dyn_ref + '__devirt) = self;
+            #base.#method_name(#(#arg_names),*)
         }
     };
 
@@ -1472,7 +1494,9 @@ fn rewrite_self_calls_in_tokens(
     let mut out = Vec::with_capacity(tts.len());
     let mut i = 0;
     while i < tts.len() {
-        // Match pattern: Ident("self")  Punct('.')  Ident(method_name)
+        // Match pattern: Ident("self")  Punct('.')  Ident(method_name)  (...)
+        // The trailing call parentheses distinguish a method call from
+        // a field that shares the method's name.
         if i + 2 < tts.len()
             && let proc_macro2::TokenTree::Ident(ref id) = tts[i]
             && *id == "self"
@@ -1480,6 +1504,11 @@ fn rewrite_self_calls_in_tokens(
             && dot.as_char() == '.'
             && let proc_macro2::TokenTree::Ident(ref method) = tts[i + 2]
             && method_names.contains(&method.to_string())
+            && matches!(
+                tts.get(i + 3),
+                Some(proc_macro2::TokenTree::Group(g))
+                    if g.delimiter() == proc_macro2::Delimiter::Parenthesis
+            )
         {
             out.push(tts[i].clone());
             out.push(tts[i + 1].clone());
