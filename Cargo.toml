@@ -3,7 +3,7 @@ members = ["crates/*", "fuzz"]
 resolver = "3"
 
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/Kab1r/devirt"
@@ -15,7 +15,7 @@ trybuild = "1"
 libfuzzer-sys = "0.4"
 arbitrary = { version = "1", features = ["derive"] }
 devirt = { path = "crates/core" }
-devirt-macros = { path = "crates/macros", version = "0.2.0" }
+devirt-macros = { path = "crates/macros", version = "0.3.0" }
 syn = { version = "3", features = ["full", "visit", "visit-mut"] }
 quote = "1"
 proc-macro2 = "1"
