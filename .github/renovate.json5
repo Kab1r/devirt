@@ -30,6 +30,16 @@
   ],
   customManagers: [
     {
+      // Track `KANI_VERSION: x.y.z` in GitHub Actions workflows against the
+      // `kani-verifier` crate, which CI installs with `cargo install`.
+      customType: "regex",
+      description: "Keep KANI_VERSION in CI workflows in sync with the kani-verifier crate",
+      managerFilePatterns: ["/^\\.github/workflows/[^/]+\\.ya?ml$/"],
+      matchStrings: ["KANI_VERSION:\\s*(?<currentValue>\\S+)"],
+      depNameTemplate: "kani-verifier",
+      datasourceTemplate: "crate",
+    },
+    {
       // Track `VERUS_TAG: release/0.YYYY.MM.DD.HASH` in GitHub Actions
       // workflows against stable releases of verus-lang/verus. Rolling
       // releases use `release/rolling/0.…` and are naturally excluded because

@@ -85,7 +85,7 @@ feature:
 
 ```toml
 [dependencies]
-devirt = { version = "0.2", default-features = false }
+devirt = { version = "0.3", default-features = false }
 ```
 
 Then use the declarative macro:
