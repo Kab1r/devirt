@@ -41,9 +41,14 @@ jobs:
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
-      - name: Apply rustfmt and Clippy fixes
+      - run: cargo fmt --all
+      # Clippy compiles the workspace, which runs dependency build scripts
+      # and proc macros, and whatever it writes is pushed by `apply`. Only
+      # do that on pull requests, where the result is reviewed before it
+      # merges. Pushes to main get rustfmt only, which runs no project code.
+      - name: Apply Clippy fixes
+        if: github.event_name == 'pull_request'
         run: |
-          cargo fmt --all
           cargo clippy --fix --workspace --exclude devirt-fuzz --all-targets \
             --allow-dirty --allow-staged -- -D warnings
           cargo fmt --all

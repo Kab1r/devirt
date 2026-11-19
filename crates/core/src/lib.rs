@@ -362,156 +362,198 @@ macro_rules! __devirt_define {
 
     (@inherent_decl $inner:ident, $trait_name:ident, [$($hot:ty),+],) => {};
 
-    // ── @dispatch_ref: &self, non-void ─────────────────────────────────────
+    // ── Dispatch arms ───────────────────────────────────────────────────────
     //
-    // Expands to: split the fat pointer into `[data, vtable]`, then for
-    // each hot type compare the extracted vtable against the
-    // compile-time-known vtable for `(HotType, Trait)`. On match,
-    // reinterpret the data pointer as `&HotType` and tail-call the hot
-    // type's `__spec_*` method directly (fully inlined under LTO). On
-    // full miss, fall through to a single `__spec_*` call via the inner
-    // trait bound, which compiles to the usual vtable indirect call.
+    // For each hot type in turn: compare the vtable of the `dyn` reference
+    // against the vtable for `(HotType, Trait)`. On a match, reinterpret
+    // the data pointer as the hot type and call its `__spec_*` method
+    // directly. After the last hot type, fall through to a single
+    // `__spec_*` call via the inner trait, which is the usual vtable call.
     //
     // Hot types are consumed by recursive expansion (rather than `$()+`
     // repetition) so the macro parser doesn't have to reconcile the
     // mismatched repetition depths of `$hot` and `$arg`.
+    //
+    // The reference is bound once, and the vtable comparison and the
+    // pointer cast both derive from that one binding and from types the
+    // compiler checks, never from values or helper functions the caller
+    // supplies. The hot call is fully qualified through `$inner` so an
+    // inherent method named `__spec_*` on the hot type cannot intercept it.
+    //
+    // These arms are an implementation detail. They are reachable from
+    // other crates only because `macro_rules!` has no privacy, and they
+    // are sound only as invoked by the `@trait` arm, where `$inner` is the
+    // supertrait of `$trait_name` that the same expansion generated.
+
+    // Vtable half of a `&dyn Trait`.
+    (@vtable_of $trait_name:ident, $this:expr) => {{
+        let __r: &dyn $trait_name = $this;
+        // SAFETY: `&dyn Trait` is a two-word fat pointer (asserted by the
+        // trait expansion); reading it as integers is always valid.
+        let __parts: [usize; 2] = unsafe {
+            ::core::mem::transmute::<&dyn $trait_name, [usize; 2]>(__r)
+        };
+        __parts[1]
+    }};
+
+    // Vtable for `($ty, Trait)`, read from a coerced dangling pointer.
+    (@vtable_for $trait_name:ident, $ty:ty) => {{
+        let __fake: *const $ty =
+            ::core::ptr::without_provenance(::core::mem::align_of::<$ty>());
+        let __fat: *const dyn $trait_name = __fake;
+        // SAFETY: as above; the data half is never dereferenced.
+        let __parts: [usize; 2] = unsafe {
+            ::core::mem::transmute::<*const dyn $trait_name, [usize; 2]>(__fat)
+        };
+        __parts[1]
+    }};
 
     (@dispatch_ref $inner:ident, $trait_name:ident, $this:tt, $method:ident,
         ($($arg:expr),*), [$($hot:ty),+]
-    ) => {{
-        let __raw: [usize; 2] =
-            <dyn $trait_name>::__devirt_raw_parts($this);
-        let __data: *const () = ::core::ptr::from_ref::<dyn $trait_name>($this).cast::<()>();
+    ) => {
         $crate::__devirt_define!(@dispatch_ref_chain
-            $inner, $trait_name, $this, $method, ($($arg),*), [$($hot),+], __raw, __data)
-    }};
+            $inner, $trait_name, $this, $method, ($($arg),*), [$($hot),+])
+    };
 
     (@dispatch_ref_chain $inner:ident, $trait_name:ident, $this:tt, $method:ident,
-        ($($arg:expr),*), [$first:ty $(, $rest:ty)*], $raw:ident, $data:ident
+        ($($arg:expr),*), [$first:ty $(, $rest:ty)*]
     ) => {{
-        if $raw[1] == <dyn $trait_name>::__devirt_vtable_for::<$first>() {
-            let __p: *const $first = $data.cast::<$first>();
-            // SAFETY: vtable identity implies type identity. The data
-            // pointer preserves provenance from the original `&dyn`
-            // reference, valid for at least the lifetime of `$this`.
+        let __this: &dyn $trait_name = $this;
+        if $crate::__devirt_define!(@vtable_of $trait_name, __this)
+            == $crate::__devirt_define!(@vtable_for $trait_name, $first)
+        {
+            let __p: *const $first =
+                ::core::ptr::from_ref::<dyn $trait_name>(__this)
+                    .cast::<()>()
+                    .cast::<$first>();
+            // SAFETY: `__this` is a `dyn $trait_name` whose vtable is the
+            // one for `$first`, so the value behind it is a `$first`. The
+            // pointer keeps the provenance of `__this`, and this branch
+            // returns before `__this` is used again.
             let __concrete: &$first = unsafe { &*__p };
             return $crate::__paste! {
-                __concrete.[<__spec_ $method>]($($arg),*)
+                <$first as $inner>::[<__spec_ $method>](__concrete $(, $arg)*)
             };
         }
         $crate::__devirt_define!(@dispatch_ref_chain
-            $inner, $trait_name, $this, $method, ($($arg),*), [$($rest),*], $raw, $data)
+            $inner, $trait_name, __this, $method, ($($arg),*), [$($rest),*])
     }};
 
     (@dispatch_ref_chain $inner:ident, $trait_name:ident, $this:tt, $method:ident,
-        ($($arg:expr),*), [], $raw:ident, $data:ident
+        ($($arg:expr),*), []
     ) => {
         $crate::__paste! { $inner::[<__spec_ $method>] }($this $(, $arg)*)
     };
-
-    // ── @dispatch_void: &self, void ─────────────────────────────────────────
 
     (@dispatch_void $inner:ident, $trait_name:ident, $this:tt, $method:ident,
         ($($arg:expr),*), [$($hot:ty),+]
-    ) => {{
-        let __raw: [usize; 2] =
-            <dyn $trait_name>::__devirt_raw_parts($this);
-        let __data: *const () = ::core::ptr::from_ref::<dyn $trait_name>($this).cast::<()>();
+    ) => {
         $crate::__devirt_define!(@dispatch_void_chain
-            $inner, $trait_name, $this, $method, ($($arg),*), [$($hot),+], __raw, __data)
-    }};
+            $inner, $trait_name, $this, $method, ($($arg),*), [$($hot),+])
+    };
 
     (@dispatch_void_chain $inner:ident, $trait_name:ident, $this:tt, $method:ident,
-        ($($arg:expr),*), [$first:ty $(, $rest:ty)*], $raw:ident, $data:ident
+        ($($arg:expr),*), [$first:ty $(, $rest:ty)*]
     ) => {{
-        if $raw[1] == <dyn $trait_name>::__devirt_vtable_for::<$first>() {
-            let __p: *const $first = $data.cast::<$first>();
-            // SAFETY: see @dispatch_ref_chain above.
+        let __this: &dyn $trait_name = $this;
+        if $crate::__devirt_define!(@vtable_of $trait_name, __this)
+            == $crate::__devirt_define!(@vtable_for $trait_name, $first)
+        {
+            let __p: *const $first =
+                ::core::ptr::from_ref::<dyn $trait_name>(__this)
+                    .cast::<()>()
+                    .cast::<$first>();
+            // SAFETY: `__this` is a `dyn $trait_name` whose vtable is the
+            // one for `$first`, so the value behind it is a `$first`. The
+            // pointer keeps the provenance of `__this`, and this branch
+            // returns before `__this` is used again.
             let __concrete: &$first = unsafe { &*__p };
             $crate::__paste! {
-                __concrete.[<__spec_ $method>]($($arg),*);
-            }
+                <$first as $inner>::[<__spec_ $method>](__concrete $(, $arg)*)
+            };
             return;
         }
         $crate::__devirt_define!(@dispatch_void_chain
-            $inner, $trait_name, $this, $method, ($($arg),*), [$($rest),*], $raw, $data)
+            $inner, $trait_name, __this, $method, ($($arg),*), [$($rest),*])
     }};
 
     (@dispatch_void_chain $inner:ident, $trait_name:ident, $this:tt, $method:ident,
-        ($($arg:expr),*), [], $raw:ident, $data:ident
+        ($($arg:expr),*), []
     ) => {
         $crate::__paste! { $inner::[<__spec_ $method>] }($this $(, $arg)*)
     };
 
-    // ── @dispatch_mut: &mut self, non-void ─────────────────────────────────
-
     (@dispatch_mut $inner:ident, $trait_name:ident, $this:tt, $method:ident,
         ($($arg:expr),*), [$($hot:ty),+]
-    ) => {{
-        // Shared reborrow to read vtable, then raw pointer from the
-        // mutable ref to preserve provenance for the hot-path cast.
-        let __raw: [usize; 2] =
-            <dyn $trait_name>::__devirt_raw_parts(&*$this);
-        let __data: *mut () = ::core::ptr::from_mut::<dyn $trait_name>($this).cast::<()>();
+    ) => {
         $crate::__devirt_define!(@dispatch_mut_chain
-            $inner, $trait_name, $this, $method, ($($arg),*), [$($hot),+], __raw, __data)
-    }};
+            $inner, $trait_name, $this, $method, ($($arg),*), [$($hot),+])
+    };
 
     (@dispatch_mut_chain $inner:ident, $trait_name:ident, $this:tt, $method:ident,
-        ($($arg:expr),*), [$first:ty $(, $rest:ty)*], $raw:ident, $data:ident
+        ($($arg:expr),*), [$first:ty $(, $rest:ty)*]
     ) => {{
-        if $raw[1] == <dyn $trait_name>::__devirt_vtable_for::<$first>() {
-            let __p: *mut $first = $data.cast::<$first>();
-            // SAFETY: vtable match → the underlying storage is a
-            // `$first`. The reborrow to `&mut $first` is scoped to
-            // this branch (which returns immediately), so the
-            // enclosing `&mut dyn $trait_name` is not accessed again
-            // while the reborrow is live.
-            let __ref: &mut $first = unsafe { &mut *__p };
+        let __this: &mut dyn $trait_name = $this;
+        if $crate::__devirt_define!(@vtable_of $trait_name, &*__this)
+            == $crate::__devirt_define!(@vtable_for $trait_name, $first)
+        {
+            let __p: *mut $first =
+                ::core::ptr::from_mut::<dyn $trait_name>(__this)
+                    .cast::<()>()
+                    .cast::<$first>();
+            // SAFETY: `__this` is a `dyn $trait_name` whose vtable is the
+            // one for `$first`, so the value behind it is a `$first`. The
+            // pointer keeps the provenance of `__this`, and this branch
+            // returns before `__this` is used again.
+            let __concrete: &mut $first = unsafe { &mut *__p };
             return $crate::__paste! {
-                __ref.[<__spec_ $method>]($($arg),*)
+                <$first as $inner>::[<__spec_ $method>](__concrete $(, $arg)*)
             };
         }
         $crate::__devirt_define!(@dispatch_mut_chain
-            $inner, $trait_name, $this, $method, ($($arg),*), [$($rest),*], $raw, $data)
+            $inner, $trait_name, __this, $method, ($($arg),*), [$($rest),*])
     }};
 
     (@dispatch_mut_chain $inner:ident, $trait_name:ident, $this:tt, $method:ident,
-        ($($arg:expr),*), [], $raw:ident, $data:ident
+        ($($arg:expr),*), []
     ) => {
         $crate::__paste! { $inner::[<__spec_ $method>] }(&mut *$this $(, $arg)*)
     };
 
-    // ── @dispatch_mut_void: &mut self, void ────────────────────────────────
-
     (@dispatch_mut_void $inner:ident, $trait_name:ident, $this:tt, $method:ident,
         ($($arg:expr),*), [$($hot:ty),+]
-    ) => {{
-        let __raw: [usize; 2] =
-            <dyn $trait_name>::__devirt_raw_parts(&*$this);
-        let __data: *mut () = ::core::ptr::from_mut::<dyn $trait_name>($this).cast::<()>();
+    ) => {
         $crate::__devirt_define!(@dispatch_mut_void_chain
-            $inner, $trait_name, $this, $method, ($($arg),*), [$($hot),+], __raw, __data)
-    }};
+            $inner, $trait_name, $this, $method, ($($arg),*), [$($hot),+])
+    };
 
     (@dispatch_mut_void_chain $inner:ident, $trait_name:ident, $this:tt, $method:ident,
-        ($($arg:expr),*), [$first:ty $(, $rest:ty)*], $raw:ident, $data:ident
+        ($($arg:expr),*), [$first:ty $(, $rest:ty)*]
     ) => {{
-        if $raw[1] == <dyn $trait_name>::__devirt_vtable_for::<$first>() {
-            let __p: *mut $first = $data.cast::<$first>();
-            // SAFETY: see @dispatch_mut_chain above.
-            let __ref: &mut $first = unsafe { &mut *__p };
+        let __this: &mut dyn $trait_name = $this;
+        if $crate::__devirt_define!(@vtable_of $trait_name, &*__this)
+            == $crate::__devirt_define!(@vtable_for $trait_name, $first)
+        {
+            let __p: *mut $first =
+                ::core::ptr::from_mut::<dyn $trait_name>(__this)
+                    .cast::<()>()
+                    .cast::<$first>();
+            // SAFETY: `__this` is a `dyn $trait_name` whose vtable is the
+            // one for `$first`, so the value behind it is a `$first`. The
+            // pointer keeps the provenance of `__this`, and this branch
+            // returns before `__this` is used again.
+            let __concrete: &mut $first = unsafe { &mut *__p };
             $crate::__paste! {
-                __ref.[<__spec_ $method>]($($arg),*);
-            }
+                <$first as $inner>::[<__spec_ $method>](__concrete $(, $arg)*)
+            };
             return;
         }
         $crate::__devirt_define!(@dispatch_mut_void_chain
-            $inner, $trait_name, $this, $method, ($($arg),*), [$($rest),*], $raw, $data)
+            $inner, $trait_name, __this, $method, ($($arg),*), [$($rest),*])
     }};
 
     (@dispatch_mut_void_chain $inner:ident, $trait_name:ident, $this:tt, $method:ident,
-        ($($arg:expr),*), [], $raw:ident, $data:ident
+        ($($arg:expr),*), []
     ) => {
         $crate::__paste! { $inner::[<__spec_ $method>] }(&mut *$this $(, $arg)*)
     };
